@@ -1,7 +1,30 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17T04:42:48Z",
+  "updatedAt": "2026-08-17T04:47:11Z",
   "apps": [
+    {
+      "id": "com.personal.appstore",
+      "name": "Мой магазин",
+      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/personal-app-store/v1.0.0/store/icon.png",
+      "versionCode": 1,
+      "versionName": "1.0.0",
+      "apkUrl": "https://github.com/khudobin-v/personal-app-store/releases/download/v1.0.0/com.personal.appstore-1.0.0.apk",
+      "sha256": "2108f9f7f24fecf6fb2a5b80a1861a7eaae91865ded984261d2942f79eef8792",
+      "apkSizeBytes": 1744685,
+      "changelog": "Первая версия магазина\n\n- витрина apps.json, установка и обновление в один тап\n- проверка sha256 перед установкой\n- офлайн-режим и фоновая проверка обновлений",
+      "releasedAt": "2026-08-17T04:47:11Z",
+      "versions": [
+        {
+          "versionCode": 1,
+          "versionName": "1.0.0",
+          "apkUrl": "https://github.com/khudobin-v/personal-app-store/releases/download/v1.0.0/com.personal.appstore-1.0.0.apk",
+          "sha256": "2108f9f7f24fecf6fb2a5b80a1861a7eaae91865ded984261d2942f79eef8792",
+          "apkSizeBytes": 1744685,
+          "changelog": "Первая версия магазина\n\n- витрина apps.json, установка и обновление в один тап\n- проверка sha256 перед установкой\n- офлайн-режим и фоновая проверка обновлений",
+          "releasedAt": "2026-08-17T04:47:11Z"
+        }
+      ]
+    },
     {
       "id": "com.example.hellostore",
       "name": "Тестовое приложение",
