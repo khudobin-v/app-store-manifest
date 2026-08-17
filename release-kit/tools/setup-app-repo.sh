@@ -4,7 +4,8 @@
 #   ./setup-app-repo.sh <владелец/репозиторий-манифеста> [путь-к-keystore]
 #
 # Что делает:
-#   1. создаёт release-ключ (если его ещё нет) и кладёт рядом с репозиторием;
+#   1. создаёт release-ключ приложения в ~/.android-store-keys/ (или использует
+#      переданный вторым аргументом, если хотите общий ключ на несколько приложений);
 #   2. заливает KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
 #      в GitHub Secrets текущего репозитория через gh;
 #   3. подставляет имя репозитория манифеста в .github/workflows/release.yml.
@@ -25,7 +26,10 @@ die() {
 [ $# -ge 1 ] || die "использование: ./setup-app-repo.sh <владелец/манифест> [путь-к-keystore]"
 
 MANIFEST_REPO="$1"
-KEYSTORE="${2:-$HOME/.android-store-release.keystore}"
+# По умолчанию — отдельный ключ на приложение: Android требует постоянства ключа
+# между версиями ОДНОГО приложения, общий ключ на все приложения не обязателен.
+# Чтобы переиспользовать существующий ключ, передайте путь к нему вторым аргументом.
+KEYSTORE="${2:-}"
 KEY_ALIAS="${KEY_ALIAS:-store-release}"
 
 command -v gh >/dev/null || die "нужен gh (brew install gh) и gh auth login"
@@ -34,22 +38,48 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "запускайте
 
 cd "$(git rev-parse --show-toplevel)"
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+[ -n "$KEYSTORE" ] || KEYSTORE="$HOME/.android-store-keys/${REPO//\//-}.keystore"
+
 echo "→ Репозиторий приложения: $REPO"
 echo "→ Репозиторий манифеста:  $MANIFEST_REPO"
+echo "→ Ключ подписи:           $KEYSTORE"
 
 # --- 1. Ключ ----------------------------------------------------------------
 # ВАЖНО: один и тот же ключ на все версии приложения. Потеряете — обновления
 # поверх установленной версии перестанут ставиться.
 
+read_password() {
+    # $1 — приглашение; результат в переменной PASSWORD_VALUE
+    printf '%s' "$1" >&2
+    stty -echo
+    read -r PASSWORD_VALUE
+    stty echo
+    printf '\n' >&2
+}
+
 if [ -f "$KEYSTORE" ]; then
     echo "→ Использую существующий keystore: $KEYSTORE"
-    read -r -s -p "Пароль keystore: " KEYSTORE_PASSWORD
-    echo
+    read_password "Пароль keystore: "
+    KEYSTORE_PASSWORD="$PASSWORD_VALUE"
     KEY_PASSWORD="$KEYSTORE_PASSWORD"
+
+    # Сразу проверяем пароль: иначе ошибка всплывёт только в CI при сборке.
+    if ! keytool -list -keystore "$KEYSTORE" -alias "$KEY_ALIAS" \
+        -storepass "$KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+        die "пароль не подходит или в хранилище нет алиаса '$KEY_ALIAS'"
+    fi
 else
     echo "→ Создаю новый keystore: $KEYSTORE"
-    KEYSTORE_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    echo "  Пароль задаёте вы: он понадобится, чтобы позже подключить этот же ключ"
+    echo "  к другому репозиторию. Сохраните его в менеджере паролей."
+    read_password "Новый пароль (минимум 6 символов): "
+    KEYSTORE_PASSWORD="$PASSWORD_VALUE"
+    read_password "Повторите пароль: "
+    [ "$KEYSTORE_PASSWORD" = "$PASSWORD_VALUE" ] || die "пароли не совпали"
+    [ ${#KEYSTORE_PASSWORD} -ge 6 ] || die "keytool требует пароль не короче 6 символов"
     KEY_PASSWORD="$KEYSTORE_PASSWORD"
+
+    mkdir -p "$(dirname "$KEYSTORE")"
     keytool -genkeypair -v \
         -keystore "$KEYSTORE" \
         -alias "$KEY_ALIAS" \
@@ -58,9 +88,10 @@ else
         -keypass "$KEY_PASSWORD" \
         -dname "CN=Personal App Store, OU=Dev, O=Personal, C=RU" >/dev/null
     chmod 600 "$KEYSTORE"
-    echo "  ключ создан, пароль сгенерирован (сохранён только в GitHub Secrets)"
-    echo "  СДЕЛАЙТЕ РЕЗЕРВНУЮ КОПИЮ ФАЙЛА $KEYSTORE"
+    echo "  ключ создан"
+    echo "  СДЕЛАЙТЕ РЕЗЕРВНУЮ КОПИЮ ФАЙЛА $KEYSTORE И СОХРАНИТЕ ПАРОЛЬ"
 fi
+unset PASSWORD_VALUE
 
 # --- 2. Secrets -------------------------------------------------------------
 
