@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17T10:33:29Z",
+  "updatedAt": "2026-08-17T10:53:06Z",
   "apps": [
     {
       "id": "com.personal.appstore",
@@ -90,6 +90,28 @@
           "apkSizeBytes": 1816466,
           "changelog": "Первый релиз тестового приложения\n\n- проверка конвейера от тега до магазина",
           "releasedAt": "2026-08-17T04:29:10Z"
+        }
+      ]
+    },
+    {
+      "id": "com.cloudwave.android",
+      "name": "com.cloudwave.android",
+      "versionCode": 2,
+      "versionName": "0.2.0",
+      "apkUrl": "https://github.com/khudobin-v/app-store-uploads/releases/download/com.cloudwave.android-0.2.0/com.cloudwave.android-0.2.0.apk",
+      "sha256": "142bb03c62aa91d65b043d9b2c8157a39fe2e7ed31a6d63a906ea6db4585031e",
+      "apkSizeBytes": 4158628,
+      "changelog": "Версия 0.2.0",
+      "releasedAt": "2026-08-17T10:53:06Z",
+      "versions": [
+        {
+          "versionCode": 2,
+          "versionName": "0.2.0",
+          "apkUrl": "https://github.com/khudobin-v/app-store-uploads/releases/download/com.cloudwave.android-0.2.0/com.cloudwave.android-0.2.0.apk",
+          "sha256": "142bb03c62aa91d65b043d9b2c8157a39fe2e7ed31a6d63a906ea6db4585031e",
+          "apkSizeBytes": 4158628,
+          "changelog": "Версия 0.2.0",
+          "releasedAt": "2026-08-17T10:53:06Z"
         }
       ]
     }
