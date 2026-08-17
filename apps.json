@@ -1,19 +1,28 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17T08:49:00Z",
+  "updatedAt": "2026-08-17T10:33:29Z",
   "apps": [
     {
       "id": "com.personal.appstore",
       "name": "Мой магазин",
-      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/personal-app-store/v1.0.1/store/icon.png",
-      "versionCode": 2,
-      "versionName": "1.0.1",
-      "apkUrl": "https://github.com/khudobin-v/personal-app-store/releases/download/v1.0.1/com.personal.appstore-1.0.1.apk",
-      "sha256": "47491705f32f7bd0b9c423a300c2f6ed60e805d22178574660bfdfb881c88d77",
-      "apkSizeBytes": 1744696,
-      "changelog": "Проверка самообновления магазина",
-      "releasedAt": "2026-08-17T04:54:34Z",
+      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/personal-app-store/v1.1.0/store/icon.png",
+      "versionCode": 3,
+      "versionName": "1.1.0",
+      "apkUrl": "https://github.com/khudobin-v/personal-app-store/releases/download/v1.1.0/com.personal.appstore-1.1.0.apk",
+      "sha256": "d5ac56dee04fe3eebe463281257204be8d74acb989a680ba253d25e1983bf659",
+      "apkSizeBytes": 1958712,
+      "changelog": "Настройка витрины на устройстве\n\n- поиск репозитория по GitHub-логину, адрес больше не зашит в сборку\n- понятное сообщение, если витрина недоступна",
+      "releasedAt": "2026-08-17T10:33:29Z",
       "versions": [
+        {
+          "versionCode": 3,
+          "versionName": "1.1.0",
+          "apkUrl": "https://github.com/khudobin-v/personal-app-store/releases/download/v1.1.0/com.personal.appstore-1.1.0.apk",
+          "sha256": "d5ac56dee04fe3eebe463281257204be8d74acb989a680ba253d25e1983bf659",
+          "apkSizeBytes": 1958712,
+          "changelog": "Настройка витрины на устройстве\n\n- поиск репозитория по GitHub-логину, адрес больше не зашит в сборку\n- понятное сообщение, если витрина недоступна",
+          "releasedAt": "2026-08-17T10:33:29Z"
+        },
         {
           "versionCode": 2,
           "versionName": "1.0.1",
