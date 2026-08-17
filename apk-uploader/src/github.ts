@@ -5,6 +5,19 @@
 
 const API = 'https://api.github.com';
 
+/** Путь прокси dev-сервера к uploads.github.com (см. vite.config.ts). */
+const UPLOAD_PROXY_PREFIX = '/gh-uploads';
+
+/**
+ * Абсолютные ссылки и путь прокси идут как есть, остальное — к api.github.com.
+ * Без проверки на прокси относительный путь склеивался бы с базой API.
+ */
+function resolveUrl(path: string): string {
+  if (path.startsWith('http')) return path;
+  if (path.startsWith(UPLOAD_PROXY_PREFIX)) return path;
+  return `${API}${path}`;
+}
+
 export class GitHubError extends Error {
   readonly status: number;
 
@@ -15,7 +28,7 @@ export class GitHubError extends Error {
 }
 
 async function request<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path.startsWith('http') ? path : `${API}${path}`, {
+  const response = await fetch(resolveUrl(path), {
     ...init,
     headers: {
       Accept: 'application/vnd.github+json',
@@ -164,7 +177,7 @@ export async function uploadAsset(
 function uploadEndpoint(release: Release): string {
   const direct = release.upload_url.split('{')[0];
   if (import.meta.env.DEV) {
-    return direct.replace('https://uploads.github.com', '/gh-uploads');
+    return direct.replace('https://uploads.github.com', UPLOAD_PROXY_PREFIX);
   }
   throw new GitHubError(
     'Загрузка APK из собранной статики невозможна: GitHub не разрешает её из браузера. ' +
