@@ -44,6 +44,19 @@
 каждом уже лежит `release.sh` и workflow, магазин публикует сам себя и умеет
 обновляться (баннер «Обновить магазин»).
 
+## Где это живёт на GitHub
+
+| Репозиторий | Роль |
+|---|---|
+| [khudobin-v/app-store-manifest](https://github.com/khudobin-v/app-store-manifest) | витрина `apps.json`, `update_manifest.py`, шаблоны `release-kit/` |
+| [khudobin-v/hello-store](https://github.com/khudobin-v/hello-store) | тестовое приложение |
+| [khudobin-v/personal-app-store](https://github.com/khudobin-v/personal-app-store) | клиент магазина |
+
+Витрина: `https://raw.githubusercontent.com/khudobin-v/app-store-manifest/main/apps.json`
+
+Приёмочный сценарий пройден целиком — таблица результатов в конце
+[`ACCEPTANCE.md`](ACCEPTANCE.md).
+
 ## Чек-лист настройки с нуля
 
 1. **Репозиторий манифеста** — один на все приложения, публичный:
@@ -88,6 +101,17 @@
 
 6. На телефоне разрешить магазину установку приложений — система спросит сама
    при первой установке (Настройки → Установка неизвестных приложений).
+
+## Приложение без исходников
+
+Готовый APK кладётся в магазин отдельным скриптом, без CI:
+
+```bash
+MANIFEST_REPO=khudobin-v/app-store-manifest release-kit/tools/publish-apk.sh ~/Downloads/app.apk "Что нового"
+```
+
+APK попадёт в Release репозитория `khudobin-v/app-store-uploads`, запись — в
+витрину. Подробности и ограничения — в [`release-kit/README.md`](release-kit/README.md).
 
 ## Ежедневный цикл
 
