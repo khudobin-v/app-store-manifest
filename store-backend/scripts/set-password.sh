@@ -2,7 +2,8 @@
 # Смена пароля входа в магазин: перезаписывает STORE_PASSWORD и передеплоивает.
 # Переменные окружения подхватываются только новым деплоем, поэтому шага два.
 set -euo pipefail
-cd "$(dirname "$0")"
+# .vercel лежит в корне проекта, а не рядом со скриптом
+cd "$(dirname "$0")/.."
 
 echo "→ Удаляю старое значение STORE_PASSWORD"
 npx vercel env rm STORE_PASSWORD production --yes >/dev/null 2>&1 || true
