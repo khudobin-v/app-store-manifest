@@ -123,10 +123,21 @@ fi
 
 if [ -n "${DRY_RUN:-}" ]; then
     echo "→ DRY_RUN: Release $PACKAGE-$VERSION_NAME в $UPLOADS_REPO не создаётся"
-elif ! gh repo view "$UPLOADS_REPO" >/dev/null 2>&1; then
-    echo "→ Создаю репозиторий-хранилище $UPLOADS_REPO"
-    gh repo create "$UPLOADS_REPO" --public \
-        --description "APK приложений без исходников для личного магазина" >/dev/null
+else
+    if ! gh repo view "$UPLOADS_REPO" >/dev/null 2>&1; then
+        echo "→ Создаю репозиторий-хранилище $UPLOADS_REPO"
+        # --add-readme обязателен: в репозитории без коммитов GitHub отказывается
+        # создавать Release с невнятным «Validation Failed» (422).
+        gh repo create "$UPLOADS_REPO" --public --add-readme \
+            --description "APK приложений без исходников для личного магазина" >/dev/null
+    elif ! gh api "repos/$UPLOADS_REPO/commits?per_page=1" >/dev/null 2>&1; then
+        echo "→ Хранилище пустое, добавляю начальный коммит"
+        printf '# %s\n\nAPK приложений личного магазина. Файлы лежат в Releases.\n' "${UPLOADS_REPO#*/}" |
+            base64 | tr -d '\n' > "$WORK/readme.b64"
+        gh api "repos/$UPLOADS_REPO/contents/README.md" -X PUT \
+            -f message='Инициализация хранилища APK' \
+            -f content="@$WORK/readme.b64" >/dev/null
+    fi
 fi
 
 TAG="${PACKAGE}-${VERSION_NAME}"

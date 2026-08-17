@@ -30,8 +30,16 @@ async function request<T>(token: string, path: string, init: RequestInit = {}): 
     const detail = await response.text().catch(() => '');
     let message = `${response.status} ${response.statusText}`;
     try {
-      const parsed = JSON.parse(detail) as { message?: string };
+      const parsed = JSON.parse(detail) as {
+        message?: string;
+        errors?: { message?: string; field?: string; code?: string }[];
+      };
       if (parsed.message) message = parsed.message;
+      // «Validation Failed» без подробностей ни о чём не говорит.
+      const details = parsed.errors
+        ?.map((e) => e.message ?? [e.field, e.code].filter(Boolean).join(' '))
+        .filter(Boolean);
+      if (details?.length) message += `: ${details.join('; ')}`;
     } catch {
       /* тело не JSON — оставляем статус */
     }
@@ -68,8 +76,36 @@ export async function ensureRepo(token: string, repo: string): Promise<void> {
       description: 'APK приложений личного магазина',
       has_issues: false,
       has_wiki: false,
+      // Без начального коммита GitHub откажется создавать Release: тегу
+      // не к чему привязаться, ответ — 422 Validation Failed.
+      auto_init: true,
     }),
   });
+}
+
+/**
+ * Гарантирует, что в репозитории есть хотя бы один коммит.
+ *
+ * Пустой репозиторий (создан вручную «без README») ломает создание Release
+ * с невнятным «Validation Failed», поэтому кладём в него README.
+ */
+export async function ensureNotEmpty(token: string, repo: string): Promise<void> {
+  try {
+    await request(token, `/repos/${repo}/commits?per_page=1`);
+    return;
+  } catch (error) {
+    // 409 Conflict — «Git Repository is empty».
+    if (!(error instanceof GitHubError) || error.status !== 409) throw error;
+  }
+
+  await putFile(
+    token,
+    repo,
+    'README.md',
+    `# ${repo.split('/')[1]}\n\nAPK приложений личного магазина. Файлы лежат в Releases.\n`,
+    'Инициализация хранилища APK',
+    null,
+  );
 }
 
 export interface Release {

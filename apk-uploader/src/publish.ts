@@ -1,5 +1,6 @@
 import type { ApkInfo } from './apk/apk';
 import {
+  ensureNotEmpty,
   ensureRepo,
   getFile,
   getOrCreateRelease,
@@ -69,6 +70,7 @@ export async function publishApk(params: PublishParams): Promise<PublishResult> 
 
   onStep(`Проверяю репозиторий ${uploadsRepo}…`);
   await ensureRepo(token, uploadsRepo);
+  await ensureNotEmpty(token, uploadsRepo);
 
   onStep(`Создаю Release ${tag}…`);
   const release = await getOrCreateRelease(
