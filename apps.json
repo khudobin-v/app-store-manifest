@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-17T04:29:10Z",
+  "apps": [
+    {
+      "id": "com.example.hellostore",
+      "name": "Тестовое приложение",
+      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/hello-store/v1.0.0/store/icon.png",
+      "versionCode": 1,
+      "versionName": "1.0.0",
+      "apkUrl": "https://github.com/khudobin-v/hello-store/releases/download/v1.0.0/com.example.hellostore-1.0.0.apk",
+      "sha256": "ac62e973061a67dc13130c33396028b0e828339214adf32f8a3f05e2843fca46",
+      "apkSizeBytes": 1816466,
+      "changelog": "Первый релиз тестового приложения\n\n- проверка конвейера от тега до магазина",
+      "releasedAt": "2026-08-17T04:29:10Z",
+      "versions": [
+        {
+          "versionCode": 1,
+          "versionName": "1.0.0",
+          "apkUrl": "https://github.com/khudobin-v/hello-store/releases/download/v1.0.0/com.example.hellostore-1.0.0.apk",
+          "sha256": "ac62e973061a67dc13130c33396028b0e828339214adf32f8a3f05e2843fca46",
+          "apkSizeBytes": 1816466,
+          "changelog": "Первый релиз тестового приложения\n\n- проверка конвейера от тега до магазина",
+          "releasedAt": "2026-08-17T04:29:10Z"
+        }
+      ]
+    }
+  ]
+}
