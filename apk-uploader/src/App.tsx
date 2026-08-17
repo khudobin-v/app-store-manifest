@@ -3,6 +3,7 @@ import { readApk, type ApkInfo } from './apk/apk';
 import { publishApk } from './publish';
 import { VersionConflictError, type Manifest } from './manifest';
 import { rawManifestUrl } from './github';
+import { discoverRepos, signInWithGhCli } from './discovery';
 import './App.css';
 
 const SETTINGS_KEY = 'apk-uploader.settings';
@@ -45,6 +46,9 @@ export default function App() {
   const [done, setDone] = useState<{ apkUrl: string; releaseUrl: string } | null>(null);
   const [storefront, setStorefront] = useState<Manifest | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [login, setLogin] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [candidates, setCandidates] = useState<string[]>([]);
   const apkInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)), [settings]);
@@ -58,6 +62,42 @@ export default function App() {
     const owner = settings.manifestRepo.split('/')[0];
     return owner ? `${owner}/app-store-uploads` : '';
   }, [settings]);
+
+  const discover = useCallback(
+    async (activeToken: string) => {
+      if (!activeToken) return;
+      setDiscovering(true);
+      setError(null);
+      try {
+        const found = await discoverRepos(activeToken);
+        setCandidates(found.manifestCandidates);
+        setSettings((prev) => ({
+          manifestRepo: prev.manifestRepo || (found.manifestRepo ?? ''),
+          uploadsRepo: prev.uploadsRepo || (found.uploadsRepo ?? ''),
+        }));
+        if (!found.manifestRepo) {
+          setError('Витрина не найдена: репозитория app-store-manifest с apps.json нет среди доступных.');
+        }
+      } catch (e) {
+        setError(`Не удалось найти репозитории: ${(e as Error).message}`);
+      } finally {
+        setDiscovering(false);
+      }
+    },
+    [],
+  );
+
+  const signIn = async () => {
+    setError(null);
+    try {
+      const session = await signInWithGhCli();
+      setToken(session.token);
+      setLogin(session.login);
+      await discover(session.token);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const refreshStorefront = useCallback(async () => {
     if (!settings.manifestRepo) return;
@@ -134,6 +174,26 @@ export default function App() {
 
       <section>
         <h2>1. Куда публикуем</h2>
+        <div className="row">
+          <button type="button" className="secondary" onClick={signIn} disabled={discovering}>
+            Войти через GitHub
+          </button>
+          {login && <span className="muted">вы вошли как {login}</span>}
+          {token && !login && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void discover(token)}
+              disabled={discovering}
+            >
+              {discovering ? 'Ищу репозитории…' : 'Найти репозитории'}
+            </button>
+          )}
+        </div>
+        <p className="hint">
+          Вход берёт токен у авторизованного <code>gh</code> CLI на этой машине (работает при запуске
+          через <code>npm run dev</code>) и сам находит витрину и хранилище. Либо вставьте токен ниже.
+        </p>
         <label>
           Репозиторий витрины
           <input
@@ -143,6 +203,21 @@ export default function App() {
             spellCheck={false}
           />
         </label>
+        {candidates.length > 1 && (
+          <label>
+            Найдено несколько витрин
+            <select
+              value={settings.manifestRepo}
+              onChange={(e) => setSettings({ ...settings, manifestRepo: e.target.value })}
+            >
+              {candidates.map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           Репозиторий-хранилище APK
           <input
