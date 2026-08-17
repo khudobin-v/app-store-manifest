@@ -1,19 +1,28 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17T04:34:50Z",
+  "updatedAt": "2026-08-17T04:42:48Z",
   "apps": [
     {
       "id": "com.example.hellostore",
       "name": "Тестовое приложение",
-      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/hello-store/v1.1.0/store/icon.png",
-      "versionCode": 2,
-      "versionName": "1.1.0",
-      "apkUrl": "https://github.com/khudobin-v/hello-store/releases/download/v1.1.0/com.example.hellostore-1.1.0.apk",
-      "sha256": "f8c0e5bcca4d8f71215b40196180e280d7f13cce422945daa16a431ab73cc048",
-      "apkSizeBytes": 1816460,
-      "changelog": "Вторая версия\n\n- проверка обновления поверх установленной",
-      "releasedAt": "2026-08-17T04:34:50Z",
+      "iconUrl": "https://raw.githubusercontent.com/khudobin-v/hello-store/v1.2.1/store/icon.png",
+      "versionCode": 3,
+      "versionName": "1.2.1",
+      "apkUrl": "https://github.com/khudobin-v/hello-store/releases/download/v1.2.1/com.example.hellostore-1.2.1.apk",
+      "sha256": "c2e39c58c0605f29a7fd15c7a49462f507e90c01069452c48647bcb80855eaf7",
+      "apkSizeBytes": 1816469,
+      "changelog": "Восстановление после отказа: versionCode поднят",
+      "releasedAt": "2026-08-17T04:42:48Z",
       "versions": [
+        {
+          "versionCode": 3,
+          "versionName": "1.2.1",
+          "apkUrl": "https://github.com/khudobin-v/hello-store/releases/download/v1.2.1/com.example.hellostore-1.2.1.apk",
+          "sha256": "c2e39c58c0605f29a7fd15c7a49462f507e90c01069452c48647bcb80855eaf7",
+          "apkSizeBytes": 1816469,
+          "changelog": "Восстановление после отказа: versionCode поднят",
+          "releasedAt": "2026-08-17T04:42:48Z"
+        },
         {
           "versionCode": 2,
           "versionName": "1.1.0",
