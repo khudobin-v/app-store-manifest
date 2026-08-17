@@ -147,13 +147,30 @@ export async function uploadAsset(
     await request(token, `/repos/${repo}/releases/assets/${existing.id}`, { method: 'DELETE' });
   }
 
-  const uploadUrl = `${release.upload_url.split('{')[0]}?name=${encodeURIComponent(name)}`;
+  const uploadUrl = `${uploadEndpoint(release)}?name=${encodeURIComponent(name)}`;
   const asset = await request<{ browser_download_url: string }>(token, uploadUrl, {
     method: 'POST',
     body: data,
     headers: { 'Content-Type': 'application/octet-stream' },
   });
   return asset.browser_download_url;
+}
+
+/**
+ * uploads.github.com не отдаёт CORS-заголовки, поэтому напрямую из браузера
+ * ассет не загрузить. В dev-режиме идём через прокси Vite (/gh-uploads),
+ * в собранной статике честно говорим, что так работать не будет.
+ */
+function uploadEndpoint(release: Release): string {
+  const direct = release.upload_url.split('{')[0];
+  if (import.meta.env.DEV) {
+    return direct.replace('https://uploads.github.com', '/gh-uploads');
+  }
+  throw new GitHubError(
+    'Загрузка APK из собранной статики невозможна: GitHub не разрешает её из браузера. ' +
+      'Запустите интерфейс через npm run dev или используйте publish-apk.sh.',
+    0,
+  );
 }
 
 export interface RemoteFile {

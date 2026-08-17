@@ -42,4 +42,16 @@ function ghCliAuth(): Plugin {
 
 export default defineConfig({
   plugins: [react(), ghCliAuth()],
+  server: {
+    proxy: {
+      // uploads.github.com не отвечает на CORS-preflight, поэтому загрузка
+      // ассета Release из браузера напрямую невозможна — проксируем через
+      // dev-сервер. В собранной статике этого прокси нет (см. github.ts).
+      '/gh-uploads': {
+        target: 'https://uploads.github.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/gh-uploads/, ''),
+      },
+    },
+  },
 });
