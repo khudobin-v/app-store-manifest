@@ -1,0 +1,46 @@
+// ---------------------------------------------------------------------------
+// Сниппет для app/build.gradle.kts: подпись релизных сборок.
+//
+// Ключ берётся ТОЛЬКО из переменных окружения, которые в CI выставляет
+// .github/workflows/release.yml. Локально KEYSTORE_PATH не задан →
+// signingConfig не создаётся и `./gradlew assembleRelease` не падает
+// (получится неподписанный APK — это нормально для локальной проверки).
+//
+// Никогда не коммитьте keystore и пароли: только GitHub Secrets.
+// ---------------------------------------------------------------------------
+
+// Вставьте в начало файла, после plugins { ... }:
+val keystorePath: String? = System.getenv("KEYSTORE_PATH")
+
+android {
+    // ... namespace / compileSdk / defaultConfig ...
+
+    signingConfigs {
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // findByName вернёт null, если ключа нет — сборка просто останется
+            // неподписанной вместо падения конфигурации.
+            signingConfig = signingConfigs.findByName("release")
+
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+}
