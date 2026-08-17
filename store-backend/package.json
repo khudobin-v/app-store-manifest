@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "set-password": "./scripts/set-password.sh"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",
