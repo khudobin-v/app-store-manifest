@@ -3,69 +3,382 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { upload } from '@vercel/blob/client';
 import { readApk, type ApkInfo } from '@/lib/apk/apk';
-import { checkVersion, type Manifest } from '@/lib/manifest';
+import { checkVersion, type AppEntry, type Manifest } from '@/lib/manifest';
 
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} Б`;
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} КБ`;
-  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+interface Stats {
+  apps: number;
+  versions: number;
+  bytes: number;
 }
 
-export default function Home() {
+function bytes(value: number): string {
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} КБ`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} ГБ`;
+}
+
+function date(iso: string | undefined): string {
+  if (!iso) return '—';
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime())
+    ? '—'
+    : parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, { cache: 'no-store', ...init });
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+  return data;
+}
+
+export default function Admin() {
   const [authorized, setAuthorized] = useState<boolean | null>(null);
-  const [password, setPassword] = useState('');
   const [catalog, setCatalog] = useState<Manifest | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const manifest = await api<Manifest>('/api/apps');
+    setCatalog(manifest);
+    try {
+      setStats(await api<Stats>('/api/stats'));
+    } catch {
+      setStats(null); // без сессии сводка недоступна — это нормально
+    }
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const session = await api<{ authorized: boolean }>('/api/auth/session');
+      setAuthorized(session.authorized);
+      await load();
+    })();
+  }, [load]);
+
+  const versionCount = catalog?.apps.reduce((sum, app) => sum + app.versions.length, 0) ?? null;
+  const apkBytes = catalog?.apps.reduce((sum, app) => sum + app.apkSizeBytes, 0) ?? null;
+
+  if (authorized === null) {
+    return <main className="shell muted">Загрузка…</main>;
+  }
+
+  if (!authorized) {
+    return <Login onSuccess={() => setAuthorized(true)} />;
+  }
+
+  return (
+    <main className="shell">
+      <header className="masthead">
+        <div>
+          <h1>Магазин приложений</h1>
+          <div className="endpoint">
+            <span>/api/apps</span>
+            <CopyButton value={`${typeof window === 'undefined' ? '' : window.location.origin}/api/apps`} />
+          </div>
+        </div>
+        <button
+          type="button"
+          className="ghost"
+          onClick={async () => {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            setAuthorized(false);
+          }}
+        >
+          Выйти
+        </button>
+      </header>
+
+      {error && <p className="notice error">{error}</p>}
+
+      <section className="section">
+        <h2 className="section-title">Витрина</h2>
+        <dl className="stats">
+          <div>
+            <dt>Приложений</dt>
+            <dd>{catalog?.apps.length ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Версий</dt>
+            <dd>{stats?.versions ?? versionCount ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Объём APK</dt>
+            <dd>{apkBytes === null ? '—' : bytes(apkBytes)}</dd>
+          </div>
+        </dl>
+        <p className="hint">
+          Объём — сумма размеров последних версий. В Blob-хранилище занято{' '}
+          {stats ? bytes(stats.bytes) : '—'}: APK из конвейера лежат в GitHub Releases, там только
+          записи каталога и файлы, загруженные вручную.
+        </p>
+      </section>
+
+      <Publish catalog={catalog} onPublished={load} onError={setError} />
+
+      <section className="section">
+        <h2 className="section-title">Каталог</h2>
+        <Catalog catalog={catalog} onChanged={load} onError={setError} />
+      </section>
+    </main>
+  );
+}
+
+function Login({ onSuccess }: { onSuccess: () => void }) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <main className="shell login">
+      <h1>Магазин приложений</h1>
+      <p className="hint">Панель управления витриной</p>
+      <form
+        style={{ marginTop: 24 }}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError(null);
+          try {
+            await api('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password }),
+            });
+            onSuccess();
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <label>
+          Пароль
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+            autoComplete="current-password"
+          />
+        </label>
+        <button type="submit" disabled={busy || !password}>
+          {busy ? 'Проверяю…' : 'Войти'}
+        </button>
+        {error && <p className="notice error">{error}</p>}
+      </form>
+    </main>
+  );
+}
+
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="link"
+      onClick={async () => {
+        await navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? 'скопировано' : 'скопировать'}
+    </button>
+  );
+}
+
+function Catalog({
+  catalog,
+  onChanged,
+  onError,
+}: {
+  catalog: Manifest | null;
+  onChanged: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  if (!catalog) return <p className="empty">Загрузка…</p>;
+  if (catalog.apps.length === 0) return <p className="empty">Каталог пуст.</p>;
+
+  return (
+    <div className="apps">
+      {catalog.apps.map((app) => (
+        <div key={app.id}>
+          <button
+            type="button"
+            className="app-row"
+            onClick={() => setOpenId(openId === app.id ? null : app.id)}
+          >
+            <span className="app-icon">
+              {app.iconUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={app.iconUrl} alt="" width={32} height={32} />
+              ) : (
+                app.name.trim().charAt(0).toUpperCase()
+              )}
+            </span>
+            <span>
+              <span className="app-name">{app.name}</span>
+              <br />
+              <span className="app-package">{app.id}</span>
+            </span>
+            <span className="app-version">
+              {app.versionName} · {bytes(app.apkSizeBytes)}
+            </span>
+          </button>
+
+          {openId === app.id && <AppDetails app={app} onChanged={onChanged} onError={onError} />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AppDetails({
+  app,
+  onChanged,
+  onError,
+}: {
+  app: AppEntry;
+  onChanged: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [name, setName] = useState(app.name);
+  const [iconUrl, setIconUrl] = useState(app.iconUrl ?? '');
+  const [busy, setBusy] = useState(false);
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    onError(null);
+    try {
+      await action();
+      await onChanged();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="details">
+      <div className="field-row">
+        <label>
+          Название
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label>
+          Иконка (URL)
+          <input value={iconUrl} onChange={(e) => setIconUrl(e.target.value)} placeholder="https://…" />
+        </label>
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy || (name === app.name && iconUrl === (app.iconUrl ?? ''))}
+          onClick={() =>
+            run(() =>
+              api(`/api/apps/${app.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, iconUrl: iconUrl.trim() || null }),
+              }),
+            )
+          }
+        >
+          Сохранить
+        </button>
+      </div>
+
+      <table className="versions">
+        <thead>
+          <tr>
+            <th>Версия</th>
+            <th>Код</th>
+            <th>Размер</th>
+            <th>Дата</th>
+            <th>APK</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {app.versions.map((version) => (
+            <tr key={version.versionCode}>
+              <td>{version.versionName}</td>
+              <td>{version.versionCode}</td>
+              <td>{bytes(version.apkSizeBytes)}</td>
+              <td>{date(version.releasedAt)}</td>
+              <td>
+                <a href={version.apkUrl} target="_blank" rel="noreferrer">
+                  файл
+                </a>
+              </td>
+              <td style={{ textAlign: 'right' }}>
+                <button
+                  type="button"
+                  className="danger tiny"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!confirm(`Удалить версию ${version.versionName} из витрины?`)) return;
+                    void run(() =>
+                      api(`/api/apps/${app.id}/versions/${version.versionCode}`, { method: 'DELETE' }),
+                    );
+                  }}
+                >
+                  Удалить
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <p className="hint" style={{ marginTop: 14 }}>
+        sha256 последней версии: <span className="mono">{app.sha256}</span>
+      </p>
+
+      <div className="actions" style={{ marginTop: 16 }}>
+        <button
+          type="button"
+          className="danger"
+          disabled={busy}
+          onClick={() => {
+            if (!confirm(`Удалить «${app.name}» со всеми версиями? Отменить нельзя.`)) return;
+            void run(() => api(`/api/apps/${app.id}`, { method: 'DELETE' }));
+          }}
+        >
+          Удалить приложение
+        </button>
+        <span className="hint">Файлы APK останутся в хранилище, из витрины запись исчезнет.</span>
+      </div>
+    </div>
+  );
+}
+
+function Publish({
+  catalog,
+  onPublished,
+  onError,
+}: {
+  catalog: Manifest | null;
+  onPublished: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [info, setInfo] = useState<ApkInfo | null>(null);
   const [name, setName] = useState('');
   const [changelog, setChangelog] = useState('');
   const [force, setForce] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const apkInput = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLInputElement>(null);
 
-  const loadCatalog = useCallback(async () => {
-    const response = await fetch('/api/apps', { cache: 'no-store' });
-    if (response.ok) setCatalog((await response.json()) as Manifest);
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      const response = await fetch('/api/auth/session', { cache: 'no-store' });
-      const data = (await response.json()) as { authorized: boolean };
-      setAuthorized(data.authorized);
-      await loadCatalog();
-    })();
-  }, [loadCatalog]);
-
-  const login = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setError(null);
-    const response = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    });
-    if (response.ok) {
-      setAuthorized(true);
-      setPassword('');
-    } else {
-      const data = (await response.json()) as { error?: string };
-      setError(data.error ?? 'не удалось войти');
-    }
-  };
-
-  const logout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    setAuthorized(false);
-  };
-
-  const onApkSelected = async (selected: File) => {
-    setError(null);
-    setDone(null);
+  const select = async (selected: File) => {
+    onError(null);
     setSteps([]);
     setForce(false);
     setFile(selected);
@@ -75,28 +388,32 @@ export default function Home() {
       setInfo(parsed);
       setName(parsed.label ?? parsed.packageName);
     } catch (e) {
-      setError((e as Error).message);
+      onError((e as Error).message);
       setFile(null);
     }
   };
 
+  const check = catalog && info ? checkVersion(catalog, info.packageName, info.versionCode) : null;
+  const conflict = check?.issue ?? null;
+  const ready = Boolean(file && info && name.trim() && !busy && (!conflict || force));
+
   const publish = async () => {
     if (!file || !info) return;
     setBusy(true);
-    setError(null);
+    onError(null);
     setSteps([]);
     const step = (message: string) => setSteps((prev) => [...prev, message]);
 
     try {
-      step(`Загружаю ${formatBytes(info.sizeBytes)} в хранилище…`);
+      step(`Загружаю ${bytes(info.sizeBytes)}`);
       const blob = await upload(`apk/${info.packageName}-${info.versionName}.apk`, file, {
         access: 'public',
         handleUploadUrl: '/api/upload',
         contentType: 'application/vnd.android.package-archive',
       });
 
-      step('Обновляю витрину…');
-      const response = await fetch('/api/apps', {
+      step('Обновляю витрину');
+      await api('/api/apps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -112,184 +429,127 @@ export default function Home() {
         }),
       });
 
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-
       step('Готово');
-      setDone(blob.url);
-      await loadCatalog();
+      setFile(null);
+      setInfo(null);
+      setChangelog('');
+      await onPublished();
     } catch (e) {
-      setError((e as Error).message);
+      onError((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  if (authorized === null) return <main className="page">Загрузка…</main>;
+  return (
+    <section className="section">
+      <h2 className="section-title">Публикация</h2>
 
-  if (!authorized) {
-    return (
-      <main className="page">
-        <h1>Личный магазин</h1>
-        <form className="card" onSubmit={login}>
+      <div
+        className={`dropzone${dragging ? ' dragging' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const dropped = e.dataTransfer.files[0];
+          if (dropped) void select(dropped);
+        }}
+        onClick={() => input.current?.click()}
+      >
+        {file ? <span className="mono">{file.name}</span> : 'Перетащите APK или нажмите, чтобы выбрать'}
+        <input
+          ref={input}
+          type="file"
+          accept=".apk,application/vnd.android.package-archive"
+          hidden
+          onChange={(e) => {
+            const selected = e.target.files?.[0];
+            if (selected) void select(selected);
+          }}
+        />
+      </div>
+
+      {info && (
+        <>
+          <dl className="meta">
+            <dt>Пакет</dt>
+            <dd>{info.packageName}</dd>
+            <dt>Версия</dt>
+            <dd>
+              {info.versionName} ({info.versionCode})
+              {check?.publishedVersionCode ? (
+                <span className="muted"> · в витрине {check.publishedVersionCode}</span>
+              ) : null}
+            </dd>
+            <dt>Размер</dt>
+            <dd>{bytes(info.sizeBytes)}</dd>
+            <dt>sha256</dt>
+            <dd>{info.sha256}</dd>
+            <dt>Подпись</dt>
+            <dd>{info.signed ? 'есть' : 'нет — система не установит'}</dd>
+          </dl>
+
           <label>
-            Пароль
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoFocus
-              autoComplete="current-password"
+            Название в магазине
+            <input value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            Что нового
+            <textarea
+              rows={3}
+              value={changelog}
+              onChange={(e) => setChangelog(e.target.value)}
+              placeholder={`Версия ${info.versionName}`}
             />
           </label>
-          <button type="submit">Войти</button>
-          {error && <p className="error">{error}</p>}
-        </form>
-        {catalog && <Catalog manifest={catalog} />}
-      </main>
-    );
-  }
 
-  const published = catalog && info ? checkVersion(catalog, info.packageName, info.versionCode) : null;
-  const conflict = published?.issue ?? null;
-  const ready = Boolean(file && info && name.trim() && !busy && (!conflict || force));
+          {conflict && (
+            <div className="notice warn">
+              <p>
+                {conflict === 'duplicate'
+                  ? `Версия ${info.versionName} (код ${info.versionCode}) уже опубликована.`
+                  : `В витрине есть версия новее: код ${check?.publishedVersionCode} против ${info.versionCode}.`}{' '}
+                Публикация заменит запись и перезальёт APK.
+              </p>
+              <p className="hint">
+                На телефон обновление приедет только при выросшем versionCode: Android не ставит APK
+                с тем же или меньшим кодом поверх установленного.
+              </p>
+              <label className="checkbox">
+                <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+                Всё равно перезалить
+              </label>
+            </div>
+          )}
 
-  return (
-    <main className="page">
-      <header className="row">
-        <h1>Загрузка APK</h1>
-        <button type="button" className="secondary" onClick={logout}>
-          Выйти
-        </button>
-      </header>
-
-      <section className="card">
-        <div
-          className={`dropzone${dragging ? ' dragging' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragging(false);
-            const dropped = e.dataTransfer.files[0];
-            if (dropped) void onApkSelected(dropped);
-          }}
-          onClick={() => apkInput.current?.click()}
-        >
-          {file ? <strong>{file.name}</strong> : 'Перетащите APK сюда или нажмите, чтобы выбрать'}
-          <input
-            ref={apkInput}
-            type="file"
-            accept=".apk,application/vnd.android.package-archive"
-            hidden
-            onChange={(e) => {
-              const selected = e.target.files?.[0];
-              if (selected) void onApkSelected(selected);
-            }}
-          />
-        </div>
-
-        {info && (
-          <>
-            <dl>
-              <dt>Пакет</dt>
-              <dd>
-                <code>{info.packageName}</code>
-              </dd>
-              <dt>Версия</dt>
-              <dd>
-                {info.versionName} ({info.versionCode})
-              </dd>
-              <dt>Размер</dt>
-              <dd>{formatBytes(info.sizeBytes)}</dd>
-              <dt>sha256</dt>
-              <dd>
-                <code className="hash">{info.sha256}</code>
-              </dd>
-              <dt>Подпись</dt>
-              <dd>{info.signed ? '✅ есть' : '❌ APK не подписан — система его не установит'}</dd>
-            </dl>
-
-            <label>
-              Название в магазине
-              <input value={name} onChange={(e) => setName(e.target.value)} />
-            </label>
-            <label>
-              Что нового
-              <textarea
-                rows={3}
-                value={changelog}
-                onChange={(e) => setChangelog(e.target.value)}
-                placeholder={`Версия ${info.versionName}`}
-              />
-            </label>
-
-            {conflict && (
-              <div className="warning">
-                <p>
-                  {conflict === 'duplicate'
-                    ? `Версия ${info.versionName} (versionCode ${info.versionCode}) уже опубликована.`
-                    : `В витрине есть версия новее: versionCode ${published?.publishedVersionCode} против ${info.versionCode}.`}{' '}
-                  Публикация заменит эту запись и перезальёт APK.
-                </p>
-                <p className="hint">
-                  На телефон обновление приедет только при выросшем versionCode: Android не ставит
-                  APK с тем же или меньшим versionCode поверх установленного.
-                </p>
-                <label className="checkbox">
-                  <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-                  Всё равно перезалить
-                </label>
-              </div>
-            )}
-
+          <div className="actions" style={{ marginTop: 18 }}>
             <button type="button" onClick={publish} disabled={!ready}>
               {busy ? 'Публикую…' : conflict && force ? 'Перезалить' : 'Опубликовать'}
             </button>
-          </>
-        )}
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={() => {
+                setFile(null);
+                setInfo(null);
+                setSteps([]);
+              }}
+            >
+              Отмена
+            </button>
+          </div>
+        </>
+      )}
 
-        {steps.length > 0 && (
-          <ol className="steps">
-            {steps.map((item, index) => (
-              <li key={`${item}-${index}`}>{item}</li>
-            ))}
-          </ol>
-        )}
-        {error && <p className="error">{error}</p>}
-        {done && (
-          <p className="done">
-            Опубликовано.{' '}
-            <a href={done} target="_blank" rel="noreferrer">
-              APK
-            </a>
-          </p>
-        )}
-      </section>
-
-      {catalog && <Catalog manifest={catalog} />}
-    </main>
-  );
-}
-
-function Catalog({ manifest }: { manifest: Manifest }) {
-  return (
-    <section className="card">
-      <h2>Витрина</h2>
-      {manifest.apps.length === 0 ? (
-        <p className="hint">Пока пусто.</p>
-      ) : (
-        <ul className="catalog">
-          {manifest.apps.map((app) => (
-            <li key={app.id}>
-              <strong>{app.name}</strong> <span className="hint">{app.id}</span>
-              <span className="version">
-                {app.versionName} ({app.versionCode})
-              </span>
-            </li>
+      {steps.length > 0 && (
+        <ul className="steps">
+          {steps.map((item, index) => (
+            <li key={`${item}-${index}`}>{item}</li>
           ))}
         </ul>
       )}

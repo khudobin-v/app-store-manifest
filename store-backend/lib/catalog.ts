@@ -1,4 +1,4 @@
-import { list, put } from '@vercel/blob';
+import { del, list, put } from '@vercel/blob';
 import { MAX_HISTORY, type AppEntry, type AppVersion, type Manifest, SCHEMA_VERSION, isoUtc } from './manifest';
 
 /**
@@ -13,6 +13,14 @@ import { MAX_HISTORY, type AppEntry, type AppVersion, type Manifest, SCHEMA_VERS
  */
 
 const PREFIX = 'catalog/';
+const META_PREFIX = 'meta/';
+
+/** Правки из панели: имя и иконка приложения, не переписывая записи версий. */
+interface AppMeta {
+  name?: string;
+  iconUrl?: string | null;
+  hidden?: boolean;
+}
 
 interface StoredVersion extends AppVersion {
   id: string;
@@ -43,6 +51,82 @@ export async function listPublished(): Promise<{ id: string; versionCode: number
   return entries;
 }
 
+async function readMeta(): Promise<Map<string, AppMeta>> {
+  const meta = new Map<string, AppMeta>();
+  const page = await list({ prefix: META_PREFIX, limit: 1000 });
+
+  await Promise.all(
+    page.blobs.map(async (blob) => {
+      const id = /^meta\/(.+)\.json$/.exec(blob.pathname)?.[1];
+      if (!id) return;
+      // ?v= — метаданные перезаписываются, из CDN может прийти старое.
+      const response = await fetch(`${blob.url}?v=${Date.now()}`, { cache: 'no-store' });
+      if (response.ok) meta.set(id, (await response.json()) as AppMeta);
+    }),
+  );
+
+  return meta;
+}
+
+export async function writeMeta(id: string, meta: AppMeta): Promise<void> {
+  await put(`${META_PREFIX}${id}.json`, JSON.stringify(meta, null, 2), {
+    access: 'public',
+    contentType: 'application/json; charset=utf-8',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    cacheControlMaxAge: 0,
+  });
+}
+
+/** Удаляет одну версию. Возвращает false, если такой версии не было. */
+export async function deleteVersion(id: string, versionCode: number): Promise<boolean> {
+  const published = await listPublished();
+  const target = published.find((entry) => entry.id === id && entry.versionCode === versionCode);
+  if (!target) return false;
+  await del(target.url);
+  return true;
+}
+
+/** Удаляет приложение целиком: все версии и правки. */
+export async function deleteApp(id: string): Promise<number> {
+  const published = (await listPublished()).filter((entry) => entry.id === id);
+  if (published.length > 0) await del(published.map((entry) => entry.url));
+
+  const meta = await list({ prefix: `${META_PREFIX}${id}.json`, limit: 1 });
+  if (meta.blobs.length > 0) await del(meta.blobs[0].url);
+
+  return published.length;
+}
+
+export interface StorageStats {
+  apps: number;
+  versions: number;
+  bytes: number;
+}
+
+/** Что лежит в хранилище: для сводки в панели. */
+export async function readStats(): Promise<StorageStats> {
+  let bytes = 0;
+  let cursor: string | undefined;
+  const apps = new Set<string>();
+  let versions = 0;
+
+  do {
+    const page = await list({ cursor, limit: 1000 });
+    for (const blob of page.blobs) {
+      bytes += blob.size;
+      const match = /^catalog\/([^/]+)\/(\d+)\.json$/.exec(blob.pathname);
+      if (match) {
+        apps.add(match[1]);
+        versions += 1;
+      }
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  return { apps: apps.size, versions, bytes };
+}
+
 export async function readCatalog(): Promise<Manifest> {
   const published = await listPublished();
 
@@ -63,14 +147,19 @@ export async function readCatalog(): Promise<Manifest> {
     byApp.set(version.id, list);
   }
 
+  const meta = await readMeta();
   const apps: AppEntry[] = [];
   for (const [id, all] of byApp) {
     const history = all.sort((a, b) => b.versionCode - a.versionCode).slice(0, MAX_HISTORY);
     const latest = history[0];
+    const overrides = meta.get(id) ?? {};
+    if (overrides.hidden) continue;
+
+    const iconUrl = overrides.iconUrl === null ? undefined : overrides.iconUrl ?? latest.iconUrl;
     apps.push({
       id,
-      name: latest.name,
-      ...(latest.iconUrl ? { iconUrl: latest.iconUrl } : {}),
+      name: overrides.name?.trim() || latest.name,
+      ...(iconUrl ? { iconUrl } : {}),
       versionCode: latest.versionCode,
       versionName: latest.versionName,
       apkUrl: latest.apkUrl,
