@@ -76,7 +76,12 @@ export default function Admin() {
   }, [toast]);
 
   const load = useCallback(async () => {
-    setCatalog(await api<Manifest>('/api/apps'));
+    try {
+      setCatalog(await api<Manifest>('/api/apps'));
+    } catch (e) {
+      // Молчать нельзя: без витрины панель не увидит уже опубликованных версий.
+      setToast({ text: `Витрина не загрузилась: ${(e as Error).message}`, kind: 'error' });
+    }
     try {
       setStats(await api<Stats>('/api/stats'));
     } catch {
@@ -662,7 +667,7 @@ function Publish({
 
   const check = catalog && info ? checkVersion(catalog, info.packageName, info.versionCode) : null;
   const conflict = check?.issue ?? null;
-  const ready = Boolean(file && info && name.trim() && !busy && (!conflict || force));
+  const ready = Boolean(catalog && file && info && name.trim() && !busy && (!conflict || force));
 
   const publish = async () => {
     if (!file || !info) return;
@@ -774,7 +779,9 @@ function Publish({
             <dt>Версия</dt>
             <dd>
               {info.versionName} ({info.versionCode})
-              {check?.publishedVersionCode ? (
+              {!catalog ? (
+                <span className="muted"> · витрина не загружена</span>
+              ) : check?.publishedVersionCode ? (
                 <span className="muted"> · в витрине код {check.publishedVersionCode}</span>
               ) : (
                 <span className="muted"> · новое приложение</span>

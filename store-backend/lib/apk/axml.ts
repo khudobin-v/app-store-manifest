@@ -226,3 +226,42 @@ export function parseAndroidManifest(bytes: Uint8Array): ApkManifestInfo {
     iconRef: iconAttr?.referenceId ?? null,
   };
 }
+
+/**
+ * Все ссылки на ресурсы из произвольного AXML-файла, в порядке появления.
+ *
+ * Нужно для adaptive icon: сам файл иконки — XML, а внутри ссылки на
+ * background и foreground, которые уже могут быть растровыми.
+ */
+export function collectReferences(bytes: Uint8Array): number[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.byteLength < 8 || view.getUint16(0, true) !== 0x0003) return [];
+
+  const references: number[] = [];
+  let offset = view.getUint16(2, true);
+
+  while (offset + 8 <= view.byteLength) {
+    const type = view.getUint16(offset, true);
+    const size = view.getUint32(offset + 4, true);
+    if (size <= 0) break;
+
+    if (type === CHUNK_START_TAG) {
+      const attrExt = offset + 16;
+      const attributeStart = view.getUint16(attrExt + 8, true);
+      const attributeSize = view.getUint16(attrExt + 10, true) || 20;
+      const attributeCount = view.getUint16(attrExt + 12, true);
+
+      for (let i = 0; i < attributeCount; i++) {
+        const base = attrExt + attributeStart + i * attributeSize;
+        if (base + 20 > view.byteLength) break;
+        if (view.getUint8(base + 15) === TYPE_REFERENCE) {
+          references.push(view.getUint32(base + 16, true));
+        }
+      }
+    }
+
+    offset += size;
+  }
+
+  return references;
+}

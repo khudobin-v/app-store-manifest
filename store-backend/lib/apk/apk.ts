@@ -1,5 +1,5 @@
 import { unzipSync } from 'fflate';
-import { parseAndroidManifest, type ApkManifestInfo } from './axml';
+import { collectReferences, parseAndroidManifest, type ApkManifestInfo } from './axml';
 import { ResourceTable } from './arsc';
 
 export interface ApkIcon {
@@ -75,7 +75,7 @@ export async function readApk(bytes: Uint8Array): Promise<ApkInfo> {
   const label =
     info.label ?? (table && info.labelRef ? table.resolveString(info.labelRef) : null) ?? null;
 
-  const iconPath = pickIconPath(table, info.iconRef, rasterCandidates);
+  const iconPath = pickIconPath(bytes, table, info.iconRef, rasterCandidates);
   const icon = iconPath ? extractIcon(bytes, iconPath) : null;
 
   return {
@@ -88,21 +88,47 @@ export async function readApk(bytes: Uint8Array): Promise<ApkInfo> {
   };
 }
 
-/** Путь к самой крупной растровой иконке: сначала по ресурсу, потом по mipmap. */
+function bestRaster(table: ResourceTable, id: number): string | null {
+  const resolved = table
+    .resolve(id)
+    .filter((entry) => RASTER.test(entry.value))
+    .sort((a, b) => (b.density || densityFromPath(b.value)) - (a.density || densityFromPath(a.value)));
+  return resolved[0]?.value ?? null;
+}
+
+/**
+ * Путь к самой крупной растровой иконке.
+ *
+ * Порядок: сам ресурс иконки → если он оказался adaptive icon (XML), его
+ * foreground/background → и лишь в конце эвристика по именам файлов. Последняя
+ * не работает, когда имена ресурсов обфусцированы при сборке (`res/AB.png`),
+ * поэтому полагаться на неё нельзя.
+ */
 function pickIconPath(
+  apk: Uint8Array,
   table: ResourceTable | null,
   iconRef: number | null,
   rasterCandidates: string[],
 ): string | null {
   if (table && iconRef) {
-    const resolved = table
-      .resolve(iconRef)
-      .filter((entry) => RASTER.test(entry.value))
-      .sort((a, b) => (b.density || densityFromPath(b.value)) - (a.density || densityFromPath(a.value)));
-    if (resolved.length > 0) return resolved[0].value;
+    const direct = bestRaster(table, iconRef);
+    if (direct) return direct;
+
+    // Adaptive icon: разворачиваем ссылки внутри XML.
+    const xml = table.resolve(iconRef).find((entry) => entry.value.endsWith('.xml'))?.value;
+    if (xml) {
+      const contents = readEntry(apk, xml);
+      if (contents) {
+        const nested = collectReferences(contents)
+          .map((id) => bestRaster(table, id))
+          .filter((path): path is string => path !== null);
+        if (nested.length > 0) {
+          return nested.sort((a, b) => densityFromPath(b) - densityFromPath(a))[0];
+        }
+      }
+    }
   }
 
-  // Adaptive icon — только XML. Берём самый крупный mipmap, он почти всегда есть.
   const fallback = rasterCandidates
     .filter((path) => /mipmap|ic_launcher|app_icon/i.test(path))
     .sort((a, b) => densityFromPath(b) - densityFromPath(a));
@@ -110,15 +136,19 @@ function pickIconPath(
   return fallback[0] ?? null;
 }
 
-function extractIcon(bytes: Uint8Array, path: string): ApkIcon | null {
+function readEntry(apk: Uint8Array, path: string): Uint8Array | null {
   try {
-    const entries = unzipSync(bytes, { filter: (file) => file.name === path });
-    const data = entries[path];
-    if (!data || data.byteLength === 0) return null;
-    return { bytes: data, path, mime: mimeFor(path) };
+    const entries = unzipSync(apk, { filter: (file) => file.name === path });
+    return entries[path] ?? null;
   } catch {
     return null;
   }
+}
+
+function extractIcon(bytes: Uint8Array, path: string): ApkIcon | null {
+  const data = readEntry(bytes, path);
+  if (!data || data.byteLength === 0) return null;
+  return { bytes: data, path, mime: mimeFor(path) };
 }
 
 /** Блок подписи APK v2/v3 помечен магической строкой перед central directory. */
