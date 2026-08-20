@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { upload } from '@vercel/blob/client';
 import { readApk, type ApkInfo } from '@/lib/apk/apk';
 import { checkVersion, type AppEntry, type Manifest } from '@/lib/manifest';
+import { QrCode } from './QrCode';
+
+/** Пакет самого магазина: его APK предлагается поставить по QR. */
+const STORE_PACKAGE = 'com.personal.appstore';
 
 type Role = 'owner' | 'publisher';
 
@@ -104,6 +108,7 @@ export default function Admin() {
   const apkBytes = catalog?.apps.reduce((sum, app) => sum + app.apkSizeBytes, 0) ?? 0;
   const versions = stats?.versions ?? catalog?.apps.reduce((sum, a) => sum + a.versions.length, 0) ?? 0;
   const [apkValue, apkUnit] = size(apkBytes);
+  const storeApp = catalog?.apps.find((app) => app.id === STORE_PACKAGE) ?? null;
 
   return (
     <>
@@ -211,6 +216,33 @@ export default function Admin() {
                 </p>
               )}
             </section>
+
+            {storeApp && (
+              <section className="block">
+                <div className="block-head">
+                  <h2 className="block-title">Магазин на телефон</h2>
+                </div>
+                <div className="card install">
+                  <QrCode value={storeApp.apkUrl} />
+                  <div>
+                    <p style={{ margin: 0 }}>
+                      Наведите камеру — скачается{' '}
+                      <b>
+                        {storeApp.name} {storeApp.versionName}
+                      </b>
+                      .
+                    </p>
+                    <p className="hint">
+                      Поставить нужно один раз: дальше магазин обновляет себя сам. Телефон попросит
+                      разрешить установку из этого источника — это нормально.
+                    </p>
+                    <div className="actions" style={{ marginTop: 'var(--s-3)' }}>
+                      <CopyButton value={storeApp.apkUrl} />
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
           </>
         )}
 
@@ -331,6 +363,7 @@ function Catalog({
   onError: (message: string | null, kind?: 'error' | 'ok') => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   if (!catalog) {
     return (
@@ -346,9 +379,38 @@ function Catalog({
     return <p className="empty">Пока пусто. Опубликуйте первое приложение на вкладке «Публикация».</p>;
   }
 
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? catalog.apps.filter(
+        (app) => app.name.toLowerCase().includes(needle) || app.id.toLowerCase().includes(needle),
+      )
+    : catalog.apps;
+
   return (
+    <>
+      {catalog.apps.length > 1 && (
+        <div className="search">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Поиск по названию или пакету"
+            spellCheck={false}
+            aria-label="Поиск по каталогу"
+          />
+          {needle && (
+            <span className="search-count">
+              {shown.length} из {catalog.apps.length}
+            </span>
+          )}
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <p className="empty">Ничего не найдено по запросу «{query.trim()}».</p>
+      ) : (
     <div className="apps">
-      {catalog.apps.map((app) => {
+      {shown.map((app) => {
         const open = openId === app.id;
         return (
           <div key={app.id}>
@@ -383,6 +445,8 @@ function Catalog({
         );
       })}
     </div>
+      )}
+    </>
   );
 }
 
@@ -499,6 +563,25 @@ function AppDetails({
           ))}
         </tbody>
       </table>
+
+      <div className="install">
+        <QrCode value={app.apkUrl} size={120} />
+        <div>
+          <h3 className="block-title" style={{ marginBottom: 'var(--s-2)' }}>
+            Установка
+          </h3>
+          <p className="hint" style={{ margin: 0 }}>
+            Наведите камеру телефона — скачается{' '}
+            <span className="mono">
+              {app.versionName} ({app.versionCode})
+            </span>
+            . Ставится как обычный APK; если магазин уже стоит, обновляйтесь через него.
+          </p>
+          <div className="actions" style={{ marginTop: 'var(--s-3)' }}>
+            <CopyButton value={app.apkUrl} />
+          </div>
+        </div>
+      </div>
 
       <dl className="meta" style={{ marginTop: 'var(--s-5)' }}>
         <dt>Опубликовал</dt>
