@@ -40,8 +40,14 @@ function constantTimeEquals(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/**
+ * Пароль сравнивается без хвостовых пробелов с обеих сторон: значение в
+ * переменной окружения легко сохраняется с переводом строки (так делает и
+ * ввод в CLI, и вставка из буфера), а пользователь его не набирает — и вход
+ * молча отвергался как «неверный пароль».
+ */
 export function checkPassword(password: string): boolean {
-  return constantTimeEquals(password, requiredEnv('STORE_PASSWORD'));
+  return constantTimeEquals(password.trim(), requiredEnv('STORE_PASSWORD').trim());
 }
 
 export async function createSession(): Promise<void> {
@@ -77,9 +83,9 @@ export async function hasValidSession(): Promise<boolean> {
 /** CI ходит с токеном: логин-форму на раннере не показать. */
 export function hasPublishToken(request: Request): boolean {
   const header = request.headers.get('authorization') ?? '';
-  const token = header.replace(/^Bearer\s+/i, '');
+  const token = header.replace(/^Bearer\s+/i, '').trim();
   if (!token) return false;
-  return constantTimeEquals(token, requiredEnv('PUBLISH_TOKEN'));
+  return constantTimeEquals(token, requiredEnv('PUBLISH_TOKEN').trim());
 }
 
 export async function isAuthorized(request: Request): Promise<boolean> {
