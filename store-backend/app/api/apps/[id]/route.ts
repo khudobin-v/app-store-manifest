@@ -1,20 +1,29 @@
 import { NextResponse } from 'next/server';
-import { hasValidSession } from '@/lib/auth';
-import { deleteApp, writeMeta } from '@/lib/catalog';
+import { currentSession } from '@/lib/auth';
+import { deleteApp, readAppOwners, writeMeta } from '@/lib/catalog';
 
 export const dynamic = 'force-dynamic';
 
-/** Правки и удаление доступны только человеку из панели, не CI-токену. */
-async function guard(): Promise<NextResponse | null> {
-  if (await hasValidSession()) return null;
-  return NextResponse.json({ error: 'нужна авторизация' }, { status: 401 });
+/**
+ * Правки и удаление — только человеку из панели, не CI-токену.
+ * Владелец распоряжается всем, издатель — только приложениями, которые
+ * публиковал сам.
+ */
+async function guard(id: string): Promise<NextResponse | null> {
+  const session = await currentSession();
+  if (!session) return NextResponse.json({ error: 'нужна авторизация' }, { status: 401 });
+  if (session.role === 'owner') return null;
+
+  const owners = await readAppOwners(id);
+  if (owners.size === 1 && owners.has(session.login)) return null;
+
+  return NextResponse.json({ error: 'приложение опубликовано не вами' }, { status: 403 });
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const denied = await guard();
-  if (denied) return denied;
-
   const { id } = await context.params;
+  const denied = await guard(id);
+  if (denied) return denied;
   const body = (await request.json().catch(() => ({}))) as {
     name?: string;
     iconUrl?: string | null;
@@ -31,10 +40,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
-  const denied = await guard();
-  if (denied) return denied;
-
   const { id } = await context.params;
+  const denied = await guard(id);
+  if (denied) return denied;
   const removed = await deleteApp(id);
   return NextResponse.json({ ok: true, removedVersions: removed });
 }

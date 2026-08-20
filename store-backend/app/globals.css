@@ -87,6 +87,29 @@ body {
   gap: 8px;
 }
 
+.who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.who .hint {
+  margin: 0;
+}
+
+select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 inherit;
+}
+
 /* --- секции --- */
 
 .section {

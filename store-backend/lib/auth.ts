@@ -1,19 +1,31 @@
 import { cookies } from 'next/headers';
+import { authenticate, type Role, type User } from './users';
 
 /**
- * Авторизация магазина: обычный вход по паролю для человека и токен для CI.
+ * Сессии магазина.
  *
- * Пароль и секрет подписи живут в переменных окружения Vercel и никогда не
- * попадают в браузер: наружу уходит только подписанная кука сессии.
+ * Человек входит логином и паролем (учётки в lib/users.ts), CI — токеном.
+ * Владелец дополнительно может войти как `OWNER_LOGIN` с паролем из
+ * STORE_PASSWORD: это страховка от потери доступа, когда учёток ещё нет или
+ * последняя из них удалена.
  */
 
 const COOKIE_NAME = 'store_session';
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // месяц
 
+export interface Session {
+  login: string;
+  role: Role;
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`не задана переменная окружения ${name}`);
   return value;
+}
+
+export function ownerLogin(): string {
+  return (process.env.OWNER_LOGIN ?? 'owner').trim().toLowerCase();
 }
 
 const encoder = new TextEncoder();
@@ -41,18 +53,27 @@ function constantTimeEquals(a: string, b: string): boolean {
 }
 
 /**
- * Пароль сравнивается без хвостовых пробелов с обеих сторон: значение в
- * переменной окружения легко сохраняется с переводом строки (так делает и
- * ввод в CLI, и вставка из буфера), а пользователь его не набирает — и вход
- * молча отвергался как «неверный пароль».
+ * Вход. Сначала учётные записи, затем аварийный вход владельца по
+ * STORE_PASSWORD. Хвостовые пробелы срезаются: значение в переменной окружения
+ * легко сохраняется с переводом строки, и вход отвергался бы как неверный.
  */
-export function checkPassword(password: string): boolean {
-  return constantTimeEquals(password.trim(), requiredEnv('STORE_PASSWORD').trim());
+export async function login(loginName: string, password: string): Promise<Session | null> {
+  const name = loginName.trim().toLowerCase();
+
+  const user: User | null = await authenticate(name, password).catch(() => null);
+  if (user) return { login: user.login, role: user.role };
+
+  const fallbackPassword = process.env.STORE_PASSWORD?.trim();
+  if (name === ownerLogin() && fallbackPassword && constantTimeEquals(password.trim(), fallbackPassword)) {
+    return { login: name, role: 'owner' };
+  }
+
+  return null;
 }
 
-export async function createSession(): Promise<void> {
+export async function createSession(session: Session): Promise<void> {
   const expiresAt = Date.now() + SESSION_TTL_SECONDS * 1000;
-  const payload = String(expiresAt);
+  const payload = `${session.login}|${session.role}|${expiresAt}`;
   const value = `${payload}.${await hmac(payload)}`;
 
   (await cookies()).set(COOKIE_NAME, value, {
@@ -68,16 +89,29 @@ export async function destroySession(): Promise<void> {
   (await cookies()).delete(COOKIE_NAME);
 }
 
-export async function hasValidSession(): Promise<boolean> {
+export async function currentSession(): Promise<Session | null> {
   const cookie = (await cookies()).get(COOKIE_NAME)?.value;
-  if (!cookie) return false;
+  if (!cookie) return null;
 
-  const [payload, signature] = cookie.split('.');
-  if (!payload || !signature) return false;
-  if (!constantTimeEquals(signature, await hmac(payload))) return false;
+  const separator = cookie.lastIndexOf('.');
+  if (separator < 0) return null;
+  const payload = cookie.slice(0, separator);
+  const signature = cookie.slice(separator + 1);
+  if (!constantTimeEquals(signature, await hmac(payload))) return null;
 
-  const expiresAt = Number(payload);
-  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+  const [loginName, role, expiresAt] = payload.split('|');
+  if (!loginName || (role !== 'owner' && role !== 'publisher')) return null;
+  if (!Number.isFinite(Number(expiresAt)) || Number(expiresAt) <= Date.now()) return null;
+
+  return { login: loginName, role };
+}
+
+export async function hasValidSession(): Promise<boolean> {
+  return (await currentSession()) !== null;
+}
+
+export async function isOwner(): Promise<boolean> {
+  return (await currentSession())?.role === 'owner';
 }
 
 /** CI ходит с токеном: логин-форму на раннере не показать. */

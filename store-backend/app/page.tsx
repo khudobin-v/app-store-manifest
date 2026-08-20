@@ -5,6 +5,18 @@ import { upload } from '@vercel/blob/client';
 import { readApk, type ApkInfo } from '@/lib/apk/apk';
 import { checkVersion, type AppEntry, type Manifest } from '@/lib/manifest';
 
+interface Session {
+  login: string;
+  role: 'owner' | 'publisher';
+}
+
+interface User {
+  login: string;
+  role: 'owner' | 'publisher';
+  createdAt: string;
+  createdBy?: string;
+}
+
 interface Stats {
   apps: number;
   versions: number;
@@ -34,7 +46,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export default function Admin() {
-  const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [catalog, setCatalog] = useState<Manifest | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,8 +63,8 @@ export default function Admin() {
 
   useEffect(() => {
     void (async () => {
-      const session = await api<{ authorized: boolean }>('/api/auth/session');
-      setAuthorized(session.authorized);
+      const current = await api<{ authorized: boolean } & Session>('/api/auth/session');
+      setSession(current.authorized ? { login: current.login, role: current.role } : null);
       await load();
     })();
   }, [load]);
@@ -60,12 +72,12 @@ export default function Admin() {
   const versionCount = catalog?.apps.reduce((sum, app) => sum + app.versions.length, 0) ?? null;
   const apkBytes = catalog?.apps.reduce((sum, app) => sum + app.apkSizeBytes, 0) ?? null;
 
-  if (authorized === null) {
+  if (session === undefined) {
     return <main className="shell muted">Загрузка…</main>;
   }
 
-  if (!authorized) {
-    return <Login onSuccess={() => setAuthorized(true)} />;
+  if (session === null) {
+    return <Login onSuccess={(entered) => setSession(entered)} />;
   }
 
   return (
@@ -78,16 +90,20 @@ export default function Admin() {
             <CopyButton value={`${typeof window === 'undefined' ? '' : window.location.origin}/api/apps`} />
           </div>
         </div>
-        <button
-          type="button"
-          className="ghost"
-          onClick={async () => {
-            await fetch('/api/auth/logout', { method: 'POST' });
-            setAuthorized(false);
-          }}
-        >
-          Выйти
-        </button>
+        <div className="who">
+          <span className="mono">{session.login}</span>
+          <span className="hint">{session.role === 'owner' ? 'владелец' : 'издатель'}</span>
+          <button
+            type="button"
+            className="ghost"
+            onClick={async () => {
+              await fetch('/api/auth/logout', { method: 'POST' });
+              setSession(null);
+            }}
+          >
+            Выйти
+          </button>
+        </div>
       </header>
 
       {error && <p className="notice error">{error}</p>}
@@ -119,13 +135,16 @@ export default function Admin() {
 
       <section className="section">
         <h2 className="section-title">Каталог</h2>
-        <Catalog catalog={catalog} onChanged={load} onError={setError} />
+        <Catalog catalog={catalog} session={session} onChanged={load} onError={setError} />
       </section>
+
+      {session.role === 'owner' && <Users onError={setError} />}
     </main>
   );
 }
 
-function Login({ onSuccess }: { onSuccess: () => void }) {
+function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -141,12 +160,12 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
           setBusy(true);
           setError(null);
           try {
-            await api('/api/auth/login', {
+            const result = await api<Session>('/api/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ password }),
+              body: JSON.stringify({ login, password }),
             });
-            onSuccess();
+            onSuccess({ login: result.login, role: result.role });
           } catch (e) {
             setError((e as Error).message);
           } finally {
@@ -155,16 +174,25 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
         }}
       >
         <label>
+          Логин
+          <input
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+            autoFocus
+            autoComplete="username"
+            spellCheck={false}
+          />
+        </label>
+        <label>
           Пароль
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoFocus
             autoComplete="current-password"
           />
         </label>
-        <button type="submit" disabled={busy || !password}>
+        <button type="submit" disabled={busy || !password || !login}>
           {busy ? 'Проверяю…' : 'Войти'}
         </button>
         {error && <p className="notice error">{error}</p>}
@@ -192,10 +220,12 @@ function CopyButton({ value }: { value: string }) {
 
 function Catalog({
   catalog,
+  session,
   onChanged,
   onError,
 }: {
   catalog: Manifest | null;
+  session: Session;
   onChanged: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
@@ -231,7 +261,9 @@ function Catalog({
             </span>
           </button>
 
-          {openId === app.id && <AppDetails app={app} onChanged={onChanged} onError={onError} />}
+          {openId === app.id && (
+            <AppDetails app={app} session={session} onChanged={onChanged} onError={onError} />
+          )}
         </div>
       ))}
     </div>
@@ -240,13 +272,16 @@ function Catalog({
 
 function AppDetails({
   app,
+  session,
   onChanged,
   onError,
 }: {
   app: AppEntry;
+  session: Session;
   onChanged: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
+  const mine = session.role === 'owner' || app.publishedBy === session.login;
   const [name, setName] = useState(app.name);
   const [iconUrl, setIconUrl] = useState(app.iconUrl ?? '');
   const [busy, setBusy] = useState(false);
@@ -278,7 +313,7 @@ function AppDetails({
         <button
           type="button"
           className="ghost"
-          disabled={busy || (name === app.name && iconUrl === (app.iconUrl ?? ''))}
+          disabled={!mine || busy || (name === app.name && iconUrl === (app.iconUrl ?? ''))}
           onClick={() =>
             run(() =>
               api(`/api/apps/${app.id}`, {
@@ -320,7 +355,7 @@ function AppDetails({
                 <button
                   type="button"
                   className="danger tiny"
-                  disabled={busy}
+                  disabled={!mine || busy}
                   onClick={() => {
                     if (!confirm(`Удалить версию ${version.versionName} из витрины?`)) return;
                     void run(() =>
@@ -338,13 +373,16 @@ function AppDetails({
 
       <p className="hint" style={{ marginTop: 14 }}>
         sha256 последней версии: <span className="mono">{app.sha256}</span>
+        <br />
+        опубликовал: <span className="mono">{app.publishedBy ?? 'ci'}</span>
+        {!mine && ' · чужое приложение, изменения недоступны'}
       </p>
 
       <div className="actions" style={{ marginTop: 16 }}>
         <button
           type="button"
           className="danger"
-          disabled={busy}
+          disabled={!mine || busy}
           onClick={() => {
             if (!confirm(`Удалить «${app.name}» со всеми версиями? Отменить нельзя.`)) return;
             void run(() => api(`/api/apps/${app.id}`, { method: 'DELETE' }));
@@ -553,6 +591,151 @@ function Publish({
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+function Users({ onError }: { onError: (message: string | null) => void }) {
+  const [users, setUsers] = useState<User[] | null>(null);
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'owner' | 'publisher'>('publisher');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api<{ users: User[] }>('/api/users');
+      setUsers(data.users);
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  }, [onError]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    onError(null);
+    try {
+      await action();
+      await load();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="section">
+      <h2 className="section-title">Пользователи</h2>
+
+      {users && users.length > 0 ? (
+        <table className="versions">
+          <thead>
+            <tr>
+              <th>Логин</th>
+              <th>Роль</th>
+              <th>Заведён</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((user) => (
+              <tr key={user.login}>
+                <td>{user.login}</td>
+                <td className="text">{user.role === 'owner' ? 'владелец' : 'издатель'}</td>
+                <td>{date(user.createdAt)}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    type="button"
+                    className="ghost tiny"
+                    disabled={busy}
+                    onClick={() => {
+                      const next = prompt(`Новый пароль для ${user.login} (минимум 8 символов)`);
+                      if (!next) return;
+                      void run(() =>
+                        api(`/api/users/${user.login}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ password: next }),
+                        }),
+                      );
+                    }}
+                  >
+                    Сменить пароль
+                  </button>{' '}
+                  <button
+                    type="button"
+                    className="danger tiny"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!confirm(`Удалить ${user.login}? Его приложения останутся в витрине.`)) return;
+                      void run(() => api(`/api/users/${user.login}`, { method: 'DELETE' }));
+                    }}
+                  >
+                    Удалить
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="empty">Учётных записей пока нет — вход только по паролю владельца.</p>
+      )}
+
+      <div className="field-row" style={{ marginTop: 20 }}>
+        <label>
+          Логин
+          <input
+            value={login}
+            onChange={(e) => setLogin(e.target.value.toLowerCase())}
+            placeholder="ivan"
+            spellCheck={false}
+          />
+        </label>
+        <label>
+          Пароль
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+        </label>
+        <label style={{ flex: '0 0 150px' }}>
+          Роль
+          <select value={role} onChange={(e) => setRole(e.target.value as 'owner' | 'publisher')}>
+            <option value="publisher">издатель</option>
+            <option value="owner">владелец</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={busy || !login || password.length < 8}
+          onClick={() =>
+            run(async () => {
+              await api('/api/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ login, password, role }),
+              });
+              setLogin('');
+              setPassword('');
+            })
+          }
+        >
+          Добавить
+        </button>
+      </div>
+
+      <p className="hint">
+        Издатель публикует приложения и правит только свои. Владелец распоряжается всем каталогом и
+        учётными записями. Пароли хранятся хешами PBKDF2, восстановить их нельзя — только задать новый.
+      </p>
     </section>
   );
 }

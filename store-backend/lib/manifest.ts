@@ -22,6 +22,8 @@ export interface AppEntry extends AppVersion {
   id: string;
   name: string;
   iconUrl?: string;
+  /** Кто опубликовал последнюю версию: показывается в панели. */
+  publishedBy?: string;
   versions: AppVersion[];
 }
 

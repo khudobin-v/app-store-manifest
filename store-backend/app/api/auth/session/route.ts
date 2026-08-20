@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { hasValidSession } from '@/lib/auth';
+import { currentSession } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  return NextResponse.json({ authorized: await hasValidSession() });
+  const session = await currentSession();
+  return NextResponse.json({ authorized: session !== null, ...(session ?? {}) });
 }

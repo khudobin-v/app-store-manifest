@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isAuthorized, hasPublishToken } from '@/lib/auth';
+import { currentSession, isAuthorized, hasPublishToken } from '@/lib/auth';
 import { listPublished, readCatalog, writeVersion, type StoredVersion } from '@/lib/catalog';
 import { ManifestFormatError, validateVersion } from '@/lib/manifest';
 
@@ -46,7 +46,9 @@ export async function POST(request: Request) {
   }
 
   // Перезаливать может только человек: конвейер сборки обязан падать на дубликате.
-  const force = Boolean(body.force) && !hasPublishToken(request);
+  const fromCi = hasPublishToken(request);
+  const force = Boolean(body.force) && !fromCi;
+  const session = await currentSession();
 
   const version: StoredVersion = {
     id: String(body.id ?? ''),
@@ -59,6 +61,7 @@ export async function POST(request: Request) {
     apkSizeBytes: Number(body.apkSizeBytes),
     changelog: (body.changelog ?? '').trim() || `Версия ${body.versionName}`,
     releasedAt: body.releasedAt ?? `${new Date().toISOString().slice(0, 19)}Z`,
+    publishedBy: fromCi ? 'ci' : (session?.login ?? 'ci'),
   };
 
   try {

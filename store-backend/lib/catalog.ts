@@ -26,6 +26,8 @@ interface StoredVersion extends AppVersion {
   id: string;
   name: string;
   iconUrl?: string;
+  /** Логин опубликовавшего либо 'ci' — нужно для прав на удаление. */
+  publishedBy?: string;
 }
 
 export function versionPath(packageName: string, versionCode: number): string {
@@ -167,7 +169,10 @@ export async function readCatalog(): Promise<Manifest> {
       apkSizeBytes: latest.apkSizeBytes,
       changelog: latest.changelog,
       releasedAt: latest.releasedAt,
-      versions: history.map(({ id: _id, name: _name, iconUrl: _icon, ...version }) => version),
+      publishedBy: latest.publishedBy,
+      versions: history.map(
+        ({ id: _id, name: _name, iconUrl: _icon, publishedBy: _by, ...version }) => version,
+      ),
     });
   }
 
@@ -186,6 +191,23 @@ export async function writeVersion(version: StoredVersion, force: boolean): Prom
     addRandomSuffix: false,
     allowOverwrite: force,
   });
+}
+
+/** Логины всех, кто публиковал версии приложения. */
+export async function readAppOwners(id: string): Promise<Set<string>> {
+  const published = (await listPublished()).filter((entry) => entry.id === id);
+  const owners = new Set<string>();
+
+  await Promise.all(
+    published.map(async (entry) => {
+      const response = await fetch(entry.url);
+      if (!response.ok) return;
+      const version = (await response.json()) as StoredVersion;
+      owners.add(version.publishedBy ?? 'ci');
+    }),
+  );
+
+  return owners;
 }
 
 export type { StoredVersion };
