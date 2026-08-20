@@ -120,21 +120,29 @@ export default function Admin() {
       <main className="shell">
         <header className="masthead">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              М
+            <span className="brand-logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+                   strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v12" />
+                <path d="M7 11l5 5 5-5" />
+                <path d="M4 20h16" />
+              </svg>
             </span>
             <div style={{ minWidth: 0 }}>
               <h1>Магазин приложений</h1>
               <span className="sub">
-                {typeof window === 'undefined' ? '' : window.location.host}/api/apps{' '}
-                <CopyButton
-                  value={`${typeof window === 'undefined' ? '' : window.location.origin}/api/apps`}
-                />
+                {catalog ? `${catalog.apps.length} ${plural(catalog.apps.length)}` : 'витрина'} ·{' '}
+                {session.role === 'owner' ? 'владелец' : 'издатель'}
               </span>
             </div>
           </div>
 
           <div className="who">
+            <Appearance />
+            <CopyEndpoint />
+            <span className="avatar" aria-hidden="true">
+              {session.login.slice(0, 2)}
+            </span>
             <div className="who-name">
               <b>{session.login}</b>
               <span>{session.role === 'owner' ? 'владелец' : 'издатель'}</span>
@@ -336,6 +344,156 @@ function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
         {error && <p className="notice error">{error}</p>}
       </form>
     </main>
+  );
+}
+
+function plural(count: number): string {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return 'приложений';
+  switch (count % 10) {
+    case 1:
+      return 'приложение';
+    case 2:
+    case 3:
+    case 4:
+      return 'приложения';
+    default:
+      return 'приложений';
+  }
+}
+
+const ACCENTS = [
+  { name: 'лаванда', value: '#5e6ad2' },
+  { name: 'синий', value: '#2f6feb' },
+  { name: 'изумруд', value: '#1f9d55' },
+  { name: 'янтарь', value: '#c2760a' },
+  { name: 'малиновый', value: '#d0397b' },
+];
+
+type Theme = 'system' | 'dark' | 'light';
+
+/** Тема и акцент: применяются к :root и запоминаются в localStorage. */
+function Appearance() {
+  const [theme, setTheme] = useState<Theme>('system');
+  const [accent, setAccent] = useState(ACCENTS[0].value);
+
+  useEffect(() => {
+    setTheme((localStorage.getItem('theme') as Theme) ?? 'system');
+    setAccent(localStorage.getItem('accent') ?? ACCENTS[0].value);
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const resolve = () =>
+      theme === 'system'
+        ? window.matchMedia('(prefers-color-scheme: light)').matches
+          ? 'light'
+          : 'dark'
+        : theme;
+
+    root.dataset.theme = resolve();
+    localStorage.setItem('theme', theme);
+
+    if (theme !== 'system') return;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const onChange = () => {
+      root.dataset.theme = resolve();
+    };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--primary', accent);
+    root.style.setProperty('--primary-hover', `color-mix(in srgb, ${accent} 76%, white)`);
+    root.style.setProperty('--primary-focus', `color-mix(in srgb, ${accent} 90%, black)`);
+    localStorage.setItem('accent', accent);
+  }, [accent]);
+
+  const next: Record<Theme, Theme> = { system: 'dark', dark: 'light', light: 'system' };
+  const title: Record<Theme, string> = {
+    system: 'Тема: как в системе',
+    dark: 'Тема: тёмная',
+    light: 'Тема: светлая',
+  };
+
+  return (
+    <div className="appearance">
+      <div className="swatches" role="group" aria-label="Акцентный цвет">
+        {ACCENTS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className="swatch"
+            style={{ background: option.value, color: option.value }}
+            aria-pressed={accent === option.value}
+            aria-label={option.name}
+            title={option.name}
+            onClick={() => setAccent(option.value)}
+          />
+        ))}
+      </div>
+      <button
+        type="button"
+        className="icon-button"
+        title={title[theme]}
+        aria-label={title[theme]}
+        onClick={() => setTheme(next[theme])}
+      >
+        {theme === 'light' ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+               strokeLinecap="round">
+            <circle cx="12" cy="12" r="4.5" />
+            <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" />
+          </svg>
+        ) : theme === 'dark' ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+               strokeLinejoin="round">
+            <path d="M20 13.5A8 8 0 1 1 10.5 4a6.5 6.5 0 0 0 9.5 9.5z" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+               strokeLinejoin="round">
+            <rect x="2.5" y="4" width="19" height="13" rx="2" />
+            <path d="M8 20h8" />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** Адрес витрины: в шапке — иконкой, полный текст в подсказке. */
+function CopyEndpoint() {
+  const [copied, setCopied] = useState(false);
+  const endpoint = typeof window === 'undefined' ? '' : `${window.location.origin}/api/apps`;
+
+  return (
+    <button
+      type="button"
+      className="icon-button"
+      title={`Скопировать адрес витрины: ${endpoint}`}
+      aria-label="Скопировать адрес витрины"
+      onClick={async () => {
+        await navigator.clipboard.writeText(endpoint);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+             strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+             strokeLinejoin="round">
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+        </svg>
+      )}
+    </button>
   );
 }
 
