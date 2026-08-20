@@ -631,7 +631,13 @@ function Publish({
   const [steps, setSteps] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [iconPreview, setIconPreview] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+
+  // Превью живёт как object URL — освобождаем при смене файла.
+  useEffect(() => () => {
+    if (iconPreview) URL.revokeObjectURL(iconPreview);
+  }, [iconPreview]);
 
   const select = async (selected: File) => {
     onError(null);
@@ -643,6 +649,11 @@ function Publish({
       const parsed = await readApk(new Uint8Array(await selected.arrayBuffer()));
       setInfo(parsed);
       setName(parsed.label ?? parsed.packageName);
+      setIconPreview(
+        parsed.icon
+          ? URL.createObjectURL(new Blob([parsed.icon.bytes as BlobPart], { type: parsed.icon.mime }))
+          : null,
+      );
     } catch (e) {
       onError((e as Error).message);
       setFile(null);
@@ -668,6 +679,18 @@ function Publish({
         contentType: 'application/vnd.android.package-archive',
       });
 
+      let iconUrl: string | undefined;
+      if (info.icon) {
+        step('Загружаю иконку из APK');
+        const extension = info.icon.path.split('.').pop() ?? 'png';
+        const iconBlob = await upload(
+          `icons/${info.packageName}-${info.versionCode}.${extension}`,
+          new Blob([info.icon.bytes as BlobPart], { type: info.icon.mime }),
+          { access: 'public', handleUploadUrl: '/api/upload', contentType: info.icon.mime },
+        );
+        iconUrl = iconBlob.url;
+      }
+
       step('Обновляю витрину');
       await api('/api/apps', {
         method: 'POST',
@@ -682,6 +705,7 @@ function Publish({
           apkSizeBytes: info.sizeBytes,
           changelog,
           force,
+          ...(iconUrl ? { iconUrl } : {}),
         }),
       });
 
@@ -689,6 +713,7 @@ function Publish({
       setInfo(null);
       setChangelog('');
       setSteps([]);
+      setIconPreview(null);
       await onPublished();
     } catch (e) {
       onError((e as Error).message);
@@ -764,6 +789,20 @@ function Publish({
               <span className={`badge ${info.signed ? 'ok' : 'bad'}`}>
                 {info.signed ? 'подписан' : 'не подписан'}
               </span>
+            </dd>
+            <dt>Иконка</dt>
+            <dd>
+              {iconPreview ? (
+                <span className="icon-found">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={iconPreview} alt="" width={28} height={28} />
+                  <span className="muted">{info.icon?.path}</span>
+                </span>
+              ) : (
+                <span className="muted">
+                  не нашлась — в APK только вектор; можно указать ссылку в карточке приложения
+                </span>
+              )}
             </dd>
           </dl>
 

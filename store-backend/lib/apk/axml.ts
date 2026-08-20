@@ -35,8 +35,11 @@ export interface ApkManifestInfo {
   packageName: string;
   versionCode: number;
   versionName: string;
-  /** null, если label — ссылка на ресурс: развернуть её без resources.arsc нельзя. */
+  /** null, если label — ссылка на ресурс: её разворачивает resources.arsc. */
   label: string | null;
+  /** Идентификаторы ресурсов, если значения заданы ссылками. */
+  labelRef: number | null;
+  iconRef: number | null;
 }
 
 class StringPool {
@@ -105,6 +108,8 @@ interface Attribute {
   stringValue: string | null;
   intValue: number | null;
   isReference: boolean;
+  /** Идентификатор ресурса, если значение — ссылка. */
+  referenceId: number | null;
 }
 
 /** Разбирает AndroidManifest.xml из APK. Бросает Error на неподдерживаемом файле. */
@@ -155,6 +160,7 @@ export function parseAndroidManifest(bytes: Uint8Array): ApkManifestInfo {
 
           let stringValue: string | null = null;
           let intValue: number | null = null;
+          const referenceId = dataType === TYPE_REFERENCE ? data : null;
           if (dataType === TYPE_STRING) {
             stringValue = pool.at(data);
           } else if (rawValueIndex >= 0) {
@@ -170,6 +176,7 @@ export function parseAndroidManifest(bytes: Uint8Array): ApkManifestInfo {
             stringValue,
             intValue,
             isReference: dataType === TYPE_REFERENCE,
+            referenceId,
           });
         }
 
@@ -195,6 +202,7 @@ export function parseAndroidManifest(bytes: Uint8Array): ApkManifestInfo {
   const versionCodeAttr = find(manifestAttributes, 'versionCode');
   const versionNameAttr = find(manifestAttributes, 'versionName');
   const labelAttr = applicationAttributes ? find(applicationAttributes, 'label') : undefined;
+  const iconAttr = applicationAttributes ? find(applicationAttributes, 'icon') : undefined;
 
   const packageName = packageAttr?.stringValue ?? '';
   if (!packageName) throw new Error('в APK не удалось прочитать packageName');
@@ -209,5 +217,12 @@ export function parseAndroidManifest(bytes: Uint8Array): ApkManifestInfo {
 
   const label = labelAttr && !labelAttr.isReference ? labelAttr.stringValue : null;
 
-  return { packageName, versionCode, versionName, label };
+  return {
+    packageName,
+    versionCode,
+    versionName,
+    label,
+    labelRef: labelAttr?.referenceId ?? null,
+    iconRef: iconAttr?.referenceId ?? null,
+  };
 }

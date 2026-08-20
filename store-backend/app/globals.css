@@ -730,6 +730,18 @@ dl.meta dd {
   border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
+.icon-found {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.icon-found img {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  object-fit: cover;
+}
+
 /* ---------- сообщения ---------- */
 
 .notice {

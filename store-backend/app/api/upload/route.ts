@@ -18,7 +18,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       onBeforeGenerateToken: async () => {
         if (!(await hasValidSession())) throw new Error('нужна авторизация');
         return {
-          allowedContentTypes: ['application/vnd.android.package-archive', 'application/octet-stream', 'image/png'],
+          allowedContentTypes: [
+            'application/vnd.android.package-archive',
+            'application/octet-stream',
+            'image/png',
+            'image/webp',
+            'image/jpeg',
+          ],
           addRandomSuffix: false,
           allowOverwrite: true,
           maximumSizeInBytes: 512 * 1024 * 1024,
