@@ -5,14 +5,16 @@ import { upload } from '@vercel/blob/client';
 import { readApk, type ApkInfo } from '@/lib/apk/apk';
 import { checkVersion, type AppEntry, type Manifest } from '@/lib/manifest';
 
+type Role = 'owner' | 'publisher';
+
 interface Session {
   login: string;
-  role: 'owner' | 'publisher';
+  role: Role;
 }
 
 interface User {
   login: string;
-  role: 'owner' | 'publisher';
+  role: Role;
   createdAt: string;
   createdBy?: string;
 }
@@ -23,11 +25,18 @@ interface Stats {
   bytes: number;
 }
 
+type Tab = 'catalog' | 'publish' | 'users';
+
+/** Размер числом и единицей отдельно: единица набирается мельче. */
+function size(value: number): [string, string] {
+  if (value < 1024) return [String(value), 'Б'];
+  if (value < 1024 * 1024) return [String(Math.round(value / 1024)), 'КБ'];
+  if (value < 1024 * 1024 * 1024) return [(value / 1024 / 1024).toFixed(1), 'МБ'];
+  return [(value / 1024 / 1024 / 1024).toFixed(2), 'ГБ'];
+}
+
 function bytes(value: number): string {
-  if (value < 1024) return `${value} Б`;
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} КБ`;
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} МБ`;
-  return `${(value / 1024 / 1024 / 1024).toFixed(2)} ГБ`;
+  return size(value).join(' ');
 }
 
 function date(iso: string | undefined): string {
@@ -35,7 +44,7 @@ function date(iso: string | undefined): string {
   const parsed = new Date(iso);
   return Number.isNaN(parsed.getTime())
     ? '—'
-    : parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    : parsed.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -49,11 +58,21 @@ export default function Admin() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [catalog, setCatalog] = useState<Manifest | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>('catalog');
+  const [toast, setToast] = useState<{ text: string; kind: 'error' | 'ok' } | null>(null);
+
+  const notify = useCallback((text: string | null, kind: 'error' | 'ok' = 'error') => {
+    setToast(text ? { text, kind } : null);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), toast.kind === 'ok' ? 2600 : 6000);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const load = useCallback(async () => {
-    const manifest = await api<Manifest>('/api/apps');
-    setCatalog(manifest);
+    setCatalog(await api<Manifest>('/api/apps'));
     try {
       setStats(await api<Stats>('/api/stats'));
     } catch {
@@ -69,77 +88,156 @@ export default function Admin() {
     })();
   }, [load]);
 
-  const versionCount = catalog?.apps.reduce((sum, app) => sum + app.versions.length, 0) ?? null;
-  const apkBytes = catalog?.apps.reduce((sum, app) => sum + app.apkSizeBytes, 0) ?? null;
-
   if (session === undefined) {
-    return <main className="shell muted">Загрузка…</main>;
+    return (
+      <main className="shell">
+        <div style={{ maxWidth: 320, marginTop: '20vh' }}>
+          <div className="skeleton" style={{ width: '40%' }} />
+          <div className="skeleton" style={{ width: '70%' }} />
+        </div>
+      </main>
+    );
   }
 
-  if (session === null) {
-    return <Login onSuccess={(entered) => setSession(entered)} />;
-  }
+  if (session === null) return <Login onSuccess={setSession} />;
+
+  const apkBytes = catalog?.apps.reduce((sum, app) => sum + app.apkSizeBytes, 0) ?? 0;
+  const versions = stats?.versions ?? catalog?.apps.reduce((sum, a) => sum + a.versions.length, 0) ?? 0;
+  const [apkValue, apkUnit] = size(apkBytes);
 
   return (
-    <main className="shell">
-      <header className="masthead">
-        <div>
-          <h1>Магазин приложений</h1>
-          <div className="endpoint">
-            <span>/api/apps</span>
-            <CopyButton value={`${typeof window === 'undefined' ? '' : window.location.origin}/api/apps`} />
+    <>
+      <main className="shell">
+        <header className="masthead">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true">
+              М
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <h1>Магазин приложений</h1>
+              <span className="sub">
+                {typeof window === 'undefined' ? '' : window.location.host}/api/apps{' '}
+                <CopyButton
+                  value={`${typeof window === 'undefined' ? '' : window.location.origin}/api/apps`}
+                />
+              </span>
+            </div>
           </div>
-        </div>
-        <div className="who">
-          <span className="mono">{session.login}</span>
-          <span className="hint">{session.role === 'owner' ? 'владелец' : 'издатель'}</span>
+
+          <div className="who">
+            <div className="who-name">
+              <b>{session.login}</b>
+              <span>{session.role === 'owner' ? 'владелец' : 'издатель'}</span>
+            </div>
+            <button
+              type="button"
+              className="ghost tiny"
+              onClick={async () => {
+                await fetch('/api/auth/logout', { method: 'POST' });
+                setSession(null);
+              }}
+            >
+              Выйти
+            </button>
+          </div>
+        </header>
+
+        <nav className="tabs" role="tablist">
           <button
             type="button"
-            className="ghost"
-            onClick={async () => {
-              await fetch('/api/auth/logout', { method: 'POST' });
-              setSession(null);
-            }}
+            role="tab"
+            className="tab"
+            aria-selected={tab === 'catalog'}
+            onClick={() => setTab('catalog')}
           >
-            Выйти
+            Витрина<span className="count">{catalog?.apps.length ?? '—'}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="tab"
+            aria-selected={tab === 'publish'}
+            onClick={() => setTab('publish')}
+          >
+            Публикация
+          </button>
+          {session.role === 'owner' && (
+            <button
+              type="button"
+              role="tab"
+              className="tab"
+              aria-selected={tab === 'users'}
+              onClick={() => setTab('users')}
+            >
+              Пользователи
+            </button>
+          )}
+        </nav>
+
+        {tab === 'catalog' && (
+          <>
+            <section className="block">
+              <dl className="stats">
+                <div>
+                  <dt>Приложений</dt>
+                  <dd>{catalog?.apps.length ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt>Версий</dt>
+                  <dd>{versions}</dd>
+                </div>
+                <div>
+                  <dt>Объём APK</dt>
+                  <dd>
+                    {apkValue}
+                    <small>{apkUnit}</small>
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section className="block">
+              <div className="block-head">
+                <h2 className="block-title">Приложения</h2>
+                <button type="button" className="link" onClick={() => void load()}>
+                  обновить
+                </button>
+              </div>
+              <Catalog catalog={catalog} session={session} onChanged={load} onError={notify} />
+              {stats && (
+                <p className="hint">
+                  В Blob-хранилище занято {bytes(stats.bytes)}: APK из конвейера лежат в GitHub
+                  Releases, здесь только записи каталога и файлы, загруженные вручную.
+                </p>
+              )}
+            </section>
+          </>
+        )}
+
+        {tab === 'publish' && (
+          <Publish
+            catalog={catalog}
+            onPublished={async () => {
+              await load();
+              notify('Опубликовано', 'ok');
+              setTab('catalog');
+            }}
+            onError={notify}
+          />
+        )}
+
+        {tab === 'users' && session.role === 'owner' && <Users session={session} onError={notify} />}
+      </main>
+
+      {toast && (
+        <div className={`toast${toast.kind === 'error' ? ' error' : ''}`} role="status">
+          <span>{toast.text}</span>
+          <button type="button" className="link" onClick={() => setToast(null)}>
+            закрыть
           </button>
         </div>
-      </header>
-
-      {error && <p className="notice error">{error}</p>}
-
-      <section className="section">
-        <h2 className="section-title">Витрина</h2>
-        <dl className="stats">
-          <div>
-            <dt>Приложений</dt>
-            <dd>{catalog?.apps.length ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Версий</dt>
-            <dd>{stats?.versions ?? versionCount ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Объём APK</dt>
-            <dd>{apkBytes === null ? '—' : bytes(apkBytes)}</dd>
-          </div>
-        </dl>
-        <p className="hint">
-          Объём — сумма размеров последних версий. В Blob-хранилище занято{' '}
-          {stats ? bytes(stats.bytes) : '—'}: APK из конвейера лежат в GitHub Releases, там только
-          записи каталога и файлы, загруженные вручную.
-        </p>
-      </section>
-
-      <Publish catalog={catalog} onPublished={load} onError={setError} />
-
-      <section className="section">
-        <h2 className="section-title">Каталог</h2>
-        <Catalog catalog={catalog} session={session} onChanged={load} onError={setError} />
-      </section>
-
-      {session.role === 'owner' && <Users onError={setError} />}
-    </main>
+      )}
+    </>
   );
 }
 
@@ -150,11 +248,14 @@ function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
   const [busy, setBusy] = useState(false);
 
   return (
-    <main className="shell login">
+    <main className="login">
+      <span className="brand-mark" aria-hidden="true">
+        М
+      </span>
       <h1>Магазин приложений</h1>
-      <p className="hint">Панель управления витриной</p>
+      <p>Панель управления витриной</p>
+
       <form
-        style={{ marginTop: 24 }}
         onSubmit={async (event) => {
           event.preventDefault();
           setBusy(true);
@@ -177,7 +278,7 @@ function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
           Логин
           <input
             value={login}
-            onChange={(e) => setLogin(e.target.value)}
+            onChange={(e) => setLogin(e.target.value.trim().toLowerCase())}
             autoFocus
             autoComplete="username"
             spellCheck={false}
@@ -192,7 +293,7 @@ function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
             autoComplete="current-password"
           />
         </label>
-        <button type="submit" disabled={busy || !password || !login}>
+        <button type="submit" disabled={busy || !login || !password}>
           {busy ? 'Проверяю…' : 'Войти'}
         </button>
         {error && <p className="notice error">{error}</p>}
@@ -213,7 +314,7 @@ function CopyButton({ value }: { value: string }) {
         setTimeout(() => setCopied(false), 1500);
       }}
     >
-      {copied ? 'скопировано' : 'скопировать'}
+      {copied ? 'скопировано' : 'копировать'}
     </button>
   );
 }
@@ -227,45 +328,60 @@ function Catalog({
   catalog: Manifest | null;
   session: Session;
   onChanged: () => Promise<void>;
-  onError: (message: string | null) => void;
+  onError: (message: string | null, kind?: 'error' | 'ok') => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
-  if (!catalog) return <p className="empty">Загрузка…</p>;
-  if (catalog.apps.length === 0) return <p className="empty">Каталог пуст.</p>;
+  if (!catalog) {
+    return (
+      <div className="apps" style={{ padding: 'var(--s-4)' }}>
+        <div className="skeleton" style={{ width: '55%' }} />
+        <div className="skeleton" style={{ width: '35%' }} />
+        <div className="skeleton" style={{ width: '45%' }} />
+      </div>
+    );
+  }
+
+  if (catalog.apps.length === 0) {
+    return <p className="empty">Пока пусто. Опубликуйте первое приложение на вкладке «Публикация».</p>;
+  }
 
   return (
     <div className="apps">
-      {catalog.apps.map((app) => (
-        <div key={app.id}>
-          <button
-            type="button"
-            className="app-row"
-            onClick={() => setOpenId(openId === app.id ? null : app.id)}
-          >
-            <span className="app-icon">
-              {app.iconUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={app.iconUrl} alt="" width={32} height={32} />
-              ) : (
-                app.name.trim().charAt(0).toUpperCase()
-              )}
-            </span>
-            <span>
-              <span className="app-name">{app.name}</span>
-              <br />
-              <span className="app-package">{app.id}</span>
-            </span>
-            <span className="app-version">
-              {app.versionName} · {bytes(app.apkSizeBytes)}
-            </span>
-          </button>
+      {catalog.apps.map((app) => {
+        const open = openId === app.id;
+        return (
+          <div key={app.id}>
+            <button
+              type="button"
+              className="app-row"
+              aria-expanded={open}
+              onClick={() => setOpenId(open ? null : app.id)}
+            >
+              <span className="app-icon">
+                {app.iconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={app.iconUrl} alt="" width={34} height={34} />
+                ) : (
+                  app.name.trim().charAt(0).toUpperCase()
+                )}
+              </span>
+              <span className="app-title">
+                <span className="app-name">{app.name}</span>
+                <span className="app-package">{app.id}</span>
+              </span>
+              <span className="app-meta">
+                <span>{app.versionName}</span>
+                <span>{bytes(app.apkSizeBytes)}</span>
+                <span>{date(app.releasedAt)}</span>
+              </span>
+              <span className="chevron" aria-hidden="true" />
+            </button>
 
-          {openId === app.id && (
-            <AppDetails app={app} session={session} onChanged={onChanged} onError={onError} />
-          )}
-        </div>
-      ))}
+            {open && <AppDetails app={app} session={session} onChanged={onChanged} onError={onError} />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -279,19 +395,20 @@ function AppDetails({
   app: AppEntry;
   session: Session;
   onChanged: () => Promise<void>;
-  onError: (message: string | null) => void;
+  onError: (message: string | null, kind?: 'error' | 'ok') => void;
 }) {
   const mine = session.role === 'owner' || app.publishedBy === session.login;
   const [name, setName] = useState(app.name);
   const [iconUrl, setIconUrl] = useState(app.iconUrl ?? '');
   const [busy, setBusy] = useState(false);
 
-  const run = async (action: () => Promise<unknown>) => {
+  const run = async (action: () => Promise<unknown>, done?: string) => {
     setBusy(true);
     onError(null);
     try {
       await action();
       await onChanged();
+      if (done) onError(done, 'ok');
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -304,23 +421,31 @@ function AppDetails({
       <div className="field-row">
         <label>
           Название
-          <input value={name} onChange={(e) => setName(e.target.value)} />
+          <input value={name} onChange={(e) => setName(e.target.value)} disabled={!mine} />
         </label>
         <label>
-          Иконка (URL)
-          <input value={iconUrl} onChange={(e) => setIconUrl(e.target.value)} placeholder="https://…" />
+          Иконка
+          <input
+            value={iconUrl}
+            onChange={(e) => setIconUrl(e.target.value)}
+            placeholder="https://…"
+            disabled={!mine}
+            spellCheck={false}
+          />
         </label>
         <button
           type="button"
           className="ghost"
           disabled={!mine || busy || (name === app.name && iconUrl === (app.iconUrl ?? ''))}
           onClick={() =>
-            run(() =>
-              api(`/api/apps/${app.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, iconUrl: iconUrl.trim() || null }),
-              }),
+            run(
+              () =>
+                api(`/api/apps/${app.id}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name, iconUrl: iconUrl.trim() || null }),
+                }),
+              'Сохранено',
             )
           }
         >
@@ -328,7 +453,7 @@ function AppDetails({
         </button>
       </div>
 
-      <table className="versions">
+      <table>
         <thead>
           <tr>
             <th>Версия</th>
@@ -336,7 +461,7 @@ function AppDetails({
             <th>Размер</th>
             <th>Дата</th>
             <th>APK</th>
-            <th />
+            <th className="right" />
           </tr>
         </thead>
         <tbody>
@@ -348,18 +473,22 @@ function AppDetails({
               <td>{date(version.releasedAt)}</td>
               <td>
                 <a href={version.apkUrl} target="_blank" rel="noreferrer">
-                  файл
+                  скачать
                 </a>
               </td>
-              <td style={{ textAlign: 'right' }}>
+              <td className="right">
                 <button
                   type="button"
                   className="danger tiny"
                   disabled={!mine || busy}
                   onClick={() => {
                     if (!confirm(`Удалить версию ${version.versionName} из витрины?`)) return;
-                    void run(() =>
-                      api(`/api/apps/${app.id}/versions/${version.versionCode}`, { method: 'DELETE' }),
+                    void run(
+                      () =>
+                        api(`/api/apps/${app.id}/versions/${version.versionCode}`, {
+                          method: 'DELETE',
+                        }),
+                      'Версия удалена',
                     );
                   }}
                 >
@@ -371,26 +500,32 @@ function AppDetails({
         </tbody>
       </table>
 
-      <p className="hint" style={{ marginTop: 14 }}>
-        sha256 последней версии: <span className="mono">{app.sha256}</span>
-        <br />
-        опубликовал: <span className="mono">{app.publishedBy ?? 'ci'}</span>
-        {!mine && ' · чужое приложение, изменения недоступны'}
-      </p>
+      <dl className="meta" style={{ marginTop: 'var(--s-5)' }}>
+        <dt>Опубликовал</dt>
+        <dd>{app.publishedBy ?? 'ci'}</dd>
+        <dt>Changelog</dt>
+        <dd style={{ fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>{app.changelog}</dd>
+        <dt>sha256</dt>
+        <dd>{app.sha256}</dd>
+      </dl>
 
-      <div className="actions" style={{ marginTop: 16 }}>
+      <div className="actions">
         <button
           type="button"
           className="danger"
           disabled={!mine || busy}
           onClick={() => {
             if (!confirm(`Удалить «${app.name}» со всеми версиями? Отменить нельзя.`)) return;
-            void run(() => api(`/api/apps/${app.id}`, { method: 'DELETE' }));
+            void run(() => api(`/api/apps/${app.id}`, { method: 'DELETE' }), 'Приложение удалено');
           }}
         >
           Удалить приложение
         </button>
-        <span className="hint">Файлы APK останутся в хранилище, из витрины запись исчезнет.</span>
+        <span className="hint" style={{ margin: 0 }}>
+          {mine
+            ? 'Файлы APK останутся в хранилище, из витрины запись исчезнет.'
+            : 'Приложение опубликовано не вами — изменения недоступны.'}
+        </span>
       </div>
     </div>
   );
@@ -403,7 +538,7 @@ function Publish({
 }: {
   catalog: Manifest | null;
   onPublished: () => Promise<void>;
-  onError: (message: string | null) => void;
+  onError: (message: string | null, kind?: 'error' | 'ok') => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [info, setInfo] = useState<ApkInfo | null>(null);
@@ -443,7 +578,7 @@ function Publish({
     const step = (message: string) => setSteps((prev) => [...prev, message]);
 
     try {
-      step(`Загружаю ${bytes(info.sizeBytes)}`);
+      step(`Загружаю ${bytes(info.sizeBytes)} в хранилище`);
       const blob = await upload(`apk/${info.packageName}-${info.versionName}.apk`, file, {
         access: 'public',
         handleUploadUrl: '/api/upload',
@@ -467,10 +602,10 @@ function Publish({
         }),
       });
 
-      step('Готово');
       setFile(null);
       setInfo(null);
       setChangelog('');
+      setSteps([]);
       await onPublished();
     } catch (e) {
       onError((e as Error).message);
@@ -480,8 +615,10 @@ function Publish({
   };
 
   return (
-    <section className="section">
-      <h2 className="section-title">Публикация</h2>
+    <section className="block">
+      <div className="block-head">
+        <h2 className="block-title">Новая версия</h2>
+      </div>
 
       <div
         className={`dropzone${dragging ? ' dragging' : ''}`}
@@ -498,7 +635,17 @@ function Publish({
         }}
         onClick={() => input.current?.click()}
       >
-        {file ? <span className="mono">{file.name}</span> : 'Перетащите APK или нажмите, чтобы выбрать'}
+        {file ? (
+          <>
+            <strong>{file.name}</strong>
+            <span>нажмите, чтобы выбрать другой</span>
+          </>
+        ) : (
+          <>
+            <strong>Перетащите APK</strong>
+            <span>или нажмите, чтобы выбрать файл</span>
+          </>
+        )}
         <input
           ref={input}
           type="file"
@@ -512,7 +659,7 @@ function Publish({
       </div>
 
       {info && (
-        <>
+        <div className="card">
           <dl className="meta">
             <dt>Пакет</dt>
             <dd>{info.packageName}</dd>
@@ -520,15 +667,21 @@ function Publish({
             <dd>
               {info.versionName} ({info.versionCode})
               {check?.publishedVersionCode ? (
-                <span className="muted"> · в витрине {check.publishedVersionCode}</span>
-              ) : null}
+                <span className="muted"> · в витрине код {check.publishedVersionCode}</span>
+              ) : (
+                <span className="muted"> · новое приложение</span>
+              )}
             </dd>
             <dt>Размер</dt>
             <dd>{bytes(info.sizeBytes)}</dd>
             <dt>sha256</dt>
             <dd>{info.sha256}</dd>
             <dt>Подпись</dt>
-            <dd>{info.signed ? 'есть' : 'нет — система не установит'}</dd>
+            <dd>
+              <span className={`badge ${info.signed ? 'ok' : 'bad'}`}>
+                {info.signed ? 'подписан' : 'не подписан'}
+              </span>
+            </dd>
           </dl>
 
           <label>
@@ -553,7 +706,7 @@ function Publish({
                   : `В витрине есть версия новее: код ${check?.publishedVersionCode} против ${info.versionCode}.`}{' '}
                 Публикация заменит запись и перезальёт APK.
               </p>
-              <p className="hint">
+              <p className="hint" style={{ margin: '0 0 8px' }}>
                 На телефон обновление приедет только при выросшем versionCode: Android не ставит APK
                 с тем же или меньшим кодом поверх установленного.
               </p>
@@ -564,7 +717,7 @@ function Publish({
             </div>
           )}
 
-          <div className="actions" style={{ marginTop: 18 }}>
+          <div className="actions" style={{ marginTop: 'var(--s-5)' }}>
             <button type="button" onClick={publish} disabled={!ready}>
               {busy ? 'Публикую…' : conflict && force ? 'Перезалить' : 'Опубликовать'}
             </button>
@@ -581,25 +734,31 @@ function Publish({
               Отмена
             </button>
           </div>
-        </>
-      )}
 
-      {steps.length > 0 && (
-        <ul className="steps">
-          {steps.map((item, index) => (
-            <li key={`${item}-${index}`}>{item}</li>
-          ))}
-        </ul>
+          {steps.length > 0 && (
+            <ul className="steps">
+              {steps.map((item, index) => (
+                <li key={`${item}-${index}`}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   );
 }
 
-function Users({ onError }: { onError: (message: string | null) => void }) {
+function Users({
+  session,
+  onError,
+}: {
+  session: Session;
+  onError: (message: string | null, kind?: 'error' | 'ok') => void;
+}) {
   const [users, setUsers] = useState<User[] | null>(null);
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'owner' | 'publisher'>('publisher');
+  const [role, setRole] = useState<Role>('publisher');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -615,12 +774,13 @@ function Users({ onError }: { onError: (message: string | null) => void }) {
     void load();
   }, [load]);
 
-  const run = async (action: () => Promise<unknown>) => {
+  const run = async (action: () => Promise<unknown>, done?: string) => {
     setBusy(true);
     onError(null);
     try {
       await action();
       await load();
+      if (done) onError(done, 'ok');
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -629,113 +789,141 @@ function Users({ onError }: { onError: (message: string | null) => void }) {
   };
 
   return (
-    <section className="section">
-      <h2 className="section-title">Пользователи</h2>
+    <>
+      <section className="block">
+        <div className="block-head">
+          <h2 className="block-title">Учётные записи</h2>
+        </div>
 
-      {users && users.length > 0 ? (
-        <table className="versions">
-          <thead>
-            <tr>
-              <th>Логин</th>
-              <th>Роль</th>
-              <th>Заведён</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.login}>
-                <td>{user.login}</td>
-                <td className="text">{user.role === 'owner' ? 'владелец' : 'издатель'}</td>
-                <td>{date(user.createdAt)}</td>
-                <td style={{ textAlign: 'right' }}>
-                  <button
-                    type="button"
-                    className="ghost tiny"
-                    disabled={busy}
-                    onClick={() => {
-                      const next = prompt(`Новый пароль для ${user.login} (минимум 8 символов)`);
-                      if (!next) return;
-                      void run(() =>
-                        api(`/api/users/${user.login}`, {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ password: next }),
-                        }),
-                      );
-                    }}
-                  >
-                    Сменить пароль
-                  </button>{' '}
-                  <button
-                    type="button"
-                    className="danger tiny"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!confirm(`Удалить ${user.login}? Его приложения останутся в витрине.`)) return;
-                      void run(() => api(`/api/users/${user.login}`, { method: 'DELETE' }));
-                    }}
-                  >
-                    Удалить
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p className="empty">Учётных записей пока нет — вход только по паролю владельца.</p>
-      )}
+        {users === null ? (
+          <div className="skeleton" style={{ width: '60%' }} />
+        ) : users.length === 0 ? (
+          <p className="empty">
+            Учёток пока нет. Вы вошли аварийным паролем владельца — заведите себе обычную запись ниже.
+          </p>
+        ) : (
+          <div className="apps" style={{ padding: '0 var(--s-4)' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Логин</th>
+                  <th>Роль</th>
+                  <th>Заведён</th>
+                  <th className="right" />
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.login}>
+                    <td>{user.login}</td>
+                    <td className="text">{user.role === 'owner' ? 'владелец' : 'издатель'}</td>
+                    <td>{date(user.createdAt)}</td>
+                    <td className="right">
+                      <div className="actions" style={{ justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="ghost tiny"
+                          disabled={busy}
+                          onClick={() => {
+                            const next = prompt(`Новый пароль для ${user.login} (от 8 символов)`);
+                            if (!next) return;
+                            void run(
+                              () =>
+                                api(`/api/users/${user.login}`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ password: next }),
+                                }),
+                              'Пароль изменён',
+                            );
+                          }}
+                        >
+                          Сменить пароль
+                        </button>
+                        <button
+                          type="button"
+                          className="danger tiny"
+                          disabled={busy || user.login === session.login}
+                          onClick={() => {
+                            if (!confirm(`Удалить ${user.login}? Его приложения останутся в витрине.`))
+                              return;
+                            void run(
+                              () => api(`/api/users/${user.login}`, { method: 'DELETE' }),
+                              'Учётка удалена',
+                            );
+                          }}
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
-      <div className="field-row" style={{ marginTop: 20 }}>
-        <label>
-          Логин
-          <input
-            value={login}
-            onChange={(e) => setLogin(e.target.value.toLowerCase())}
-            placeholder="ivan"
-            spellCheck={false}
-          />
-        </label>
-        <label>
-          Пароль
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-          />
-        </label>
-        <label style={{ flex: '0 0 150px' }}>
-          Роль
-          <select value={role} onChange={(e) => setRole(e.target.value as 'owner' | 'publisher')}>
-            <option value="publisher">издатель</option>
-            <option value="owner">владелец</option>
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={busy || !login || password.length < 8}
-          onClick={() =>
-            run(async () => {
-              await api('/api/users', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ login, password, role }),
-              });
-              setLogin('');
-              setPassword('');
-            })
-          }
-        >
-          Добавить
-        </button>
-      </div>
+      <section className="block">
+        <div className="block-head">
+          <h2 className="block-title">Новый пользователь</h2>
+        </div>
 
-      <p className="hint">
-        Издатель публикует приложения и правит только свои. Владелец распоряжается всем каталогом и
-        учётными записями. Пароли хранятся хешами PBKDF2, восстановить их нельзя — только задать новый.
-      </p>
-    </section>
+        <div className="card">
+          <div className="field-row">
+            <label>
+              Логин
+              <input
+                value={login}
+                onChange={(e) => setLogin(e.target.value.toLowerCase())}
+                placeholder="ivan"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              Пароль
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <label style={{ flex: '0 0 150px' }}>
+              Роль
+              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+                <option value="publisher">издатель</option>
+                <option value="owner">владелец</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={busy || !login || password.length < 8}
+              onClick={() =>
+                run(async () => {
+                  await api('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ login, password, role }),
+                  });
+                  setLogin('');
+                  setPassword('');
+                }, 'Пользователь добавлен')
+              }
+            >
+              Добавить
+            </button>
+          </div>
+
+          <p className="hint" style={{ margin: 0 }}>
+            Издатель публикует приложения и правит только свои. Владелец распоряжается всем каталогом
+            и учётками. Пароли хранятся хешами PBKDF2 — восстановить нельзя, только задать новый.
+            Издатель может опубликовать APK, который встанет на телефоны без диалога: зовите тех,
+            кому доверяете.
+          </p>
+        </div>
+      </section>
+    </>
   );
 }
