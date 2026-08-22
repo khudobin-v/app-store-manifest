@@ -15,8 +15,6 @@ permissions:
   contents: write # нужно для gh release create в этом же репозитории
 
 env:
-  # ЗАМЕНИТЕ на свой репозиторий манифеста (владелец/имя).
-  MANIFEST_REPO: YOUR_GITHUB_USERNAME/app-store-manifest
   # Путь к иконке приложения внутри этого репозитория (необязательно).
   ICON_PATH: store/icon.png
 

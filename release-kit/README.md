@@ -21,6 +21,12 @@ GitHub Release → обновляет `apps.json` в репозитории ма
 | `tools/setup-app-repo.sh` | запустить один раз, коммитить не нужно |
 | `store/icon.png` | иконка 512×512 (необязательно) |
 
+## Подключение через ИИ-помощника
+
+Если репозиторий приложения настраивает ИИ-агент, дайте ему
+[`AGENT.md`](AGENT.md) — там тот же чек-лист, но с проверками на каждом шаге и
+с явным запретом трогать пароли и ключ подписи.
+
 ## Чек-лист настройки нового приложения
 
 1. **Репозиторий манифеста** уже должен существовать — см. `app-store-manifest/README.md`.
@@ -34,17 +40,8 @@ GitHub Release → обновляет `apps.json` в репозитории ма
      `./release.sh` (CI отклонит релиз при расхождении);
    - **поднимайте `versionCode` на каждый релиз** — конвейер отклонит дубликат.
 
-4. Настройте ключ и secrets — один раз на репозиторий:
-
-   ```bash
-   ./tools/setup-app-repo.sh <владелец>/app-store-manifest
-   ```
-
-   Скрипт создаст release-ключ, зальёт `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`,
-   `KEY_ALIAS`, `KEY_PASSWORD` в GitHub Secrets и подставит имя репозитория
-   манифеста в workflow. Отдельно попросит `MANIFEST_PAT`.
-
-   Вручную то же самое (Settings → Secrets and variables → Actions):
+4. Настройте ключ и secrets — один раз на репозиторий (Settings → Secrets and
+   variables → Actions):
 
    | Secret | Значение |
    |---|---|
@@ -52,16 +49,12 @@ GitHub Release → обновляет `apps.json` в репозитории ма
    | `KEYSTORE_PASSWORD` | пароль хранилища |
    | `KEY_ALIAS` | алиас ключа |
    | `KEY_PASSWORD` | пароль ключа |
-   | `MANIFEST_PAT` | fine-grained PAT, `Contents: read and write` **только** на репозиторий манифеста |
+   | `STORE_API` | адрес витрины, например `https://ваш-магазин.vercel.app` |
+   | `PUBLISH_TOKEN` | токен публикации из переменных окружения бэкенда |
 
-5. Замените placeholder в `.github/workflows/release.yml`:
+   Ключ и первые четыре secret'а умеет завести `./tools/setup-app-repo.sh`.
 
-   ```yaml
-   env:
-     MANIFEST_REPO: YOUR_GITHUB_USERNAME/app-store-manifest   # ← ваш репозиторий
-   ```
-
-6. Закоммитьте и запушьте, затем:
+5. Закоммитьте и запушьте, затем:
 
    ```bash
    ./release.sh 1.0.0 "Первый релиз"
