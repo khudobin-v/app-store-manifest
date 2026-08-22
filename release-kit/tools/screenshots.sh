@@ -4,9 +4,10 @@
 #   ./tools/screenshots.sh <apk> <packageName> <каталог для кадров>
 #
 # Запускается конвейером сборки внутри android-emulator-runner, когда эмулятор
-# уже поднят. Приложение неизвестно скрипту, поэтому кадры снимаются вслепую:
-# запуск, две прокрутки и свайп вбок. Одинаковые кадры выбрасываются — у
-# приложения без прокрутки останется один снимок, а не пять копий.
+# уже поднят. Приложение скрипту незнакомо, поэтому экраны он ищет сам: читает
+# дерево элементов через uiautomator и на каждом шаге выбирает, что сделать —
+# прокрутить список, нажать кнопку или протянуть широкий элемент (так проходят
+# слайдеры вроде «проведите, чтобы начать»). Кадры-дубликаты выбрасываются.
 
 set -euo pipefail
 
@@ -15,6 +16,10 @@ PACKAGE="${2:?вторым аргументом нужен packageName}"
 OUT="${3:?третьим аргументом нужен каталог для кадров}"
 
 MAX_SHOTS=5
+MAX_STEPS=12
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT"
 
 echo "Ставлю $APK"
@@ -34,45 +39,188 @@ focused() {
     adb shell dumpsys activity activities | grep -m1 topResumedActivity | grep -q "$PACKAGE"
 }
 
-# Если приложение упало на старте, снимать нечего: в кадре будет лаунчер.
 if ! focused; then
     echo "::warning::$PACKAGE не в фокусе после запуска — скриншотов не будет"
     exit 0
 fi
 
-index=0
-capture() {
-    # Жест мог увести из приложения (например, назад с первого экрана) — тогда
-    # в кадр попал бы чужой экран, и такой снимок в витрине не нужен.
-    if ! focused; then
-        echo "пропускаю кадр: приложение больше не в фокусе"
-        return 0
-    fi
-    index=$((index + 1))
-    [ "$index" -le "$MAX_SHOTS" ] || return 0
-    adb exec-out screencap -p > "$OUT/raw-$index.png"
-    echo "кадр $index: $(stat -c%s "$OUT/raw-$index.png" 2>/dev/null || stat -f%z "$OUT/raw-$index.png") байт"
+shots=0
+: > "$WORK/hashes"
+: > "$WORK/used"
+
+# Снимок сохраняется, только если приложение в фокусе и такого кадра ещё не
+# было: у экрана без изменений иначе получилось бы пять одинаковых картинок.
+keyboard_shown() {
+    adb shell dumpsys input_method | grep -q 'mInputShown=true'
 }
 
-capture                                                        # первый экран
-adb shell input swipe 540 1600 540 700 300; sleep 2; capture   # прокрутка вниз
-adb shell input swipe 540 1600 540 700 300; sleep 2; capture   # ещё ниже
-adb shell input swipe 900 1200 200 1200 300; sleep 2; capture  # свайп вбок
-adb shell input swipe 200 1200 900 1200 300; sleep 2; capture  # и обратно
+# Слепок экрана — по дереву элементов, а не по пикселям: одна и та же страница
+# с всплывающим сообщением или другой секундой на часах даёт разные картинки,
+# но одинаковое дерево, и второй раз снимать её незачем.
+screen_signature() {
+    adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 1
+    adb shell cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || return 1
+    python3 - "$WORK/ui.xml" <<'SIG'
+import hashlib, sys, xml.etree.ElementTree as ET
 
-seen=()
-# Одинаковые кадры не нужны: у статичного экрана все снимки совпадут побайтно.
-kept=0
-for raw in "$OUT"/raw-*.png; do
-    [ -f "$raw" ] || continue
-    sum="$(sha256sum "$raw" | cut -d' ' -f1)"
-    if [ "${#seen[@]}" -gt 0 ] && printf '%s\n' "${seen[@]}" | grep -qx "$sum"; then
-        rm -f "$raw"
-        continue
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+except ET.ParseError:
+    sys.exit(1)
+
+parts = [
+    '|'.join((
+        node.get('class', ''),
+        node.get('resource-id', ''),
+        node.get('text', ''),
+        node.get('content-desc', ''),
+        node.get('bounds', ''),
+    ))
+    for node in root.iter('node')
+]
+print(hashlib.sha256('\n'.join(parts).encode('utf-8')).hexdigest())
+SIG
+}
+
+capture() {
+    # Клавиатура могла подняться от жеста — в кадре она не нужна.
+    if keyboard_shown; then
+        adb shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
+        sleep 1
     fi
-    seen+=("$sum")
-    kept=$((kept + 1))
-    mv "$raw" "$OUT/screenshot-$kept.png"
+    focused || { echo "  кадр пропущен: приложение не в фокусе"; return 0; }
+    [ "$shots" -lt "$MAX_SHOTS" ] || return 0
+
+    local sum
+    sum="$(screen_signature || true)"
+    if [ -n "$sum" ] && grep -qx "$sum" "$WORK/hashes"; then
+        echo "  кадр пропущен: тот же экран"
+        return 0
+    fi
+    [ -n "$sum" ] && echo "$sum" >> "$WORK/hashes"
+
+    shots=$((shots + 1))
+    adb exec-out screencap -p > "$OUT/screenshot-$shots.png"
+    echo "  кадр $shots сохранён"
+}
+
+# Следующее действие выбирается по дереву элементов: сначала прокрутка списка,
+# потом широкие элементы (слайдеры), потом обычные кнопки. Уже испробованные
+# элементы пропускаются, иначе обход топчется на первой же кнопке.
+next_action() {
+    adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 1
+    adb shell cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || return 1
+    python3 - "$WORK/ui.xml" "$WORK/used" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+
+tree_path, used_path = sys.argv[1], sys.argv[2]
+try:
+    root = ET.parse(tree_path).getroot()
+except ET.ParseError:
+    sys.exit(1)
+
+used = set(open(used_path, encoding='utf-8').read().split('\n'))
+BOUNDS = re.compile(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+
+nodes = []
+for node in root.iter('node'):
+    match = BOUNDS.match(node.get('bounds', ''))
+    if not match:
+        continue
+    x1, y1, x2, y2 = (int(v) for v in match.groups())
+    width, height = x2 - x1, y2 - y1
+    if width < 40 or height < 40:
+        continue
+    # Поля ввода не трогаем: от нажатия поднимется клавиатура, и кадр уйдёт
+    # в витрину с ней, а нового экрана не появится.
+    if 'EditText' in node.get('class', ''):
+        continue
+    nodes.append({
+        'key': f"{node.get('resource-id', '')}|{node.get('content-desc', '')}|{node.get('bounds')}",
+        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+        'width': width, 'height': height,
+        'scrollable': node.get('scrollable') == 'true',
+        'clickable': node.get('clickable') == 'true',
+    })
+
+if not nodes:
+    sys.exit(1)
+
+screen_width = max(n['x2'] for n in nodes)
+screen_height = max(n['y2'] for n in nodes)
+
+def free(node):
+    return node['key'] not in used
+
+# 1. Прокрутка: самый крупный список, который ещё не крутили.
+scrollables = sorted(
+    (n for n in nodes if n['scrollable'] and free(n)),
+    key=lambda item: item['width'] * item['height'],
+    reverse=True,
+)
+if scrollables:
+    n = scrollables[0]
+    cx = (n['x1'] + n['x2']) // 2
+    print(f"{n['key']}\tswipe {cx} {n['y1'] + int(n['height'] * 0.75)} {cx} {n['y1'] + int(n['height'] * 0.25)} 300")
+    sys.exit(0)
+
+# 2. Широкий элемент — тянем слева направо: так проходят слайдеры
+#    «проведите, чтобы продолжить», которые от нажатия не срабатывают.
+wide = [
+    n for n in nodes
+    if free(n) and n['clickable'] and n['width'] > screen_width * 0.6 and n['height'] < screen_height * 0.25
+]
+if wide:
+    n = min(wide, key=lambda item: item['y1'])
+    cy = (n['y1'] + n['y2']) // 2
+    print(f"{n['key']}\tswipe {n['x1'] + n['width'] // 10} {cy} {n['x2'] - n['width'] // 10} {cy} 700")
+    sys.exit(0)
+
+# 3. Обычная кнопка или карточка: жмём самую крупную из неиспробованных.
+clickables = sorted(
+    (n for n in nodes if n['clickable'] and free(n)),
+    key=lambda item: item['width'] * item['height'],
+    reverse=True,
+)
+if clickables:
+    n = clickables[0]
+    print(f"{n['key']}\ttap {(n['x1'] + n['x2']) // 2} {(n['y1'] + n['y2']) // 2}")
+    sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+capture
+
+step=0
+while [ "$shots" -lt "$MAX_SHOTS" ] && [ "$step" -lt "$MAX_STEPS" ]; do
+    step=$((step + 1))
+
+    if ! action="$(next_action)"; then
+        echo "шаг $step: подходящих элементов не нашлось"
+        break
+    fi
+
+    key="${action%%$'\t'*}"
+    command="${action#*$'\t'}"
+    echo "шаг $step: $command"
+    printf '%s\n' "$key" >> "$WORK/used"
+
+    # shellcheck disable=SC2086
+    adb shell input $command >/dev/null 2>&1 || true
+    # Ждём дольше, чем живёт короткое всплывающее сообщение: иначе оно попадёт
+    # в кадр поверх экрана.
+    sleep 4
+
+    # Нажатие могло увести из приложения — возвращаемся и пробуем дальше.
+    if ! focused; then
+        echo "  вышли из приложения, возвращаюсь"
+        adb shell input keyevent KEYCODE_BACK >/dev/null 2>&1 || true
+        sleep 2
+    fi
+
+    capture
 done
 
-echo "Снято кадров: $kept"
+echo "Снято кадров: $shots"
