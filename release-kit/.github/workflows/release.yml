@@ -152,6 +152,28 @@ jobs:
 
           echo "$PACKAGE $VERSION_NAME ($VERSION_CODE), $SIZE bytes, sha256 $SHA256"
 
+      # KVM нужен эмулятору: без него он поднимается минутами и часто падает.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Скриншоты — приятная мелочь, а не условие релиза: эмулятор в CI
+      # капризен, и его падение не должно останавливать публикацию.
+      - name: Capture screenshots
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: ./tools/screenshots.sh "${{ steps.apk.outputs.path }}" "${{ steps.apk.outputs.package }}" "${{ runner.temp }}/screenshots"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -159,86 +181,93 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.tag.outputs.tag }}"
 
+          # APK обязателен, снимки экрана — если эмулятор их снял.
+          ASSETS=("${{ steps.apk.outputs.path }}")
+          for shot in "$RUNNER_TEMP"/screenshots/screenshot-*.png; do
+            [ -f "$shot" ] && ASSETS+=("$shot")
+          done
+          echo "ассетов: ${#ASSETS[@]}"
+
           # Release мог остаться от упавшего прогона (например, не хватило прав
           # на манифест): тогда перезаливаем ассет, а не падаем на «уже существует».
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG уже существует — обновляю ассет и описание"
-            gh release upload "$TAG" "${{ steps.apk.outputs.path }}" --clobber
+            echo "Release $TAG уже существует — обновляю ассеты и описание"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
             gh release edit "$TAG" \
               --title "${{ steps.apk.outputs.label }} ${{ steps.apk.outputs.version_name }}" \
               --notes-file "${{ steps.tag.outputs.changelog_file }}"
           else
             gh release create "$TAG" \
-              "${{ steps.apk.outputs.path }}" \
+              "${ASSETS[@]}" \
               --title "${{ steps.apk.outputs.label }} ${{ steps.apk.outputs.version_name }}" \
               --notes-file "${{ steps.tag.outputs.changelog_file }}"
           fi
 
-      - name: Checkout manifest repository
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ env.MANIFEST_REPO }}
-          token: ${{ secrets.MANIFEST_PAT }}
-          path: manifest-repo
-
-      - name: Update apps.json
-        id: manifest
+      - name: Publish to store
+        env:
+          STORE_API: ${{ secrets.STORE_API }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${STORE_API:-}" ] || [ -z "${PUBLISH_TOKEN:-}" ]; then
+            echo "::error::не заданы secrets STORE_API и PUBLISH_TOKEN"
+            exit 1
+          fi
 
-          ICON_ARG=()
+          # export: значения читаются из python ниже через os.environ.
+          export ICON_URL=""
           if [ -f "$ICON_PATH" ]; then
-            ICON_ARG=(--icon-url "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${{ steps.tag.outputs.tag }}/${ICON_PATH}")
+            export ICON_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${{ steps.tag.outputs.tag }}/${ICON_PATH}"
           fi
 
-          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.tag.outputs.tag }}/${{ steps.apk.outputs.file }}"
-
-          set +e
-          python3 manifest-repo/scripts/update_manifest.py \
-            --manifest manifest-repo/apps.json \
-            --id "${{ steps.apk.outputs.package }}" \
-            --name "${{ steps.apk.outputs.label }}" \
-            --version-code "${{ steps.apk.outputs.version_code }}" \
-            --version-name "${{ steps.apk.outputs.version_name }}" \
-            --apk-url "$APK_URL" \
-            --sha256 "${{ steps.apk.outputs.sha256 }}" \
-            --apk-size "${{ steps.apk.outputs.size }}" \
-            --changelog-file "${{ steps.tag.outputs.changelog_file }}" \
-            "${ICON_ARG[@]}"
-          STATUS=$?
-          set -e
-
-          if [ "$STATUS" -eq 2 ]; then
-            echo "::error::versionCode ${{ steps.apk.outputs.version_code }} уже опубликован или меньше текущего — поднимите versionCode в app/build.gradle.kts"
-            exit 1
-          fi
-          exit "$STATUS"
-
-      - name: Commit and push manifest
-        working-directory: manifest-repo
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps.json
-          if git diff --cached --quiet; then
-            echo "::error::apps.json не изменился — публиковать нечего"
-            exit 1
-          fi
-          git commit -m "${{ steps.apk.outputs.package }} ${{ steps.apk.outputs.version_name }} (${{ steps.apk.outputs.version_code }})"
-
-          # Другой релиз мог обновить манифест, пока мы собирались.
-          for attempt in 1 2 3; do
-            if git push; then
-              echo "манифест обновлён (попытка $attempt)"
-              exit 0
-            fi
-            echo "push отклонён, подтягиваю изменения и повторяю…"
-            git pull --rebase --no-edit || true
-            sleep $((attempt * 3))
+          # Снимки экрана уже лежат ассетами релиза — витрине нужны их ссылки.
+          SCREENSHOT_URLS=""
+          for shot in "$RUNNER_TEMP"/screenshots/screenshot-*.png; do
+            [ -f "$shot" ] || continue
+            SCREENSHOT_URLS="$SCREENSHOT_URLS https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.tag.outputs.tag }}/$(basename "$shot")"
           done
-          echo "::error::не удалось запушить apps.json в ${MANIFEST_REPO}"
-          exit 1
+          export SCREENSHOT_URLS
+
+          # JSON собираем питоном: changelog многострочный, кавычки экранировать вручную нельзя.
+          python3 - "${{ steps.tag.outputs.changelog_file }}" > "$RUNNER_TEMP/publish.json" <<PY
+          import json, os, sys
+          payload = {
+              "id": "${{ steps.apk.outputs.package }}",
+              "name": "${{ steps.apk.outputs.label }}",
+              "versionCode": int("${{ steps.apk.outputs.version_code }}"),
+              "versionName": "${{ steps.apk.outputs.version_name }}",
+              "apkUrl": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.tag.outputs.tag }}/${{ steps.apk.outputs.file }}",
+              "sha256": "${{ steps.apk.outputs.sha256 }}",
+              "apkSizeBytes": int("${{ steps.apk.outputs.size }}"),
+              "changelog": open(sys.argv[1], encoding="utf-8").read().strip(),
+          }
+          icon = os.environ.get("ICON_URL")
+          if icon:
+              payload["iconUrl"] = icon
+          shots = os.environ.get("SCREENSHOT_URLS", "").split()
+          if shots:
+              payload["screenshots"] = shots
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+
+          # Витрина отклоняет повтор versionCode кодом 409 — это ошибка сборки.
+          STATUS="$(curl -sS -o "$RUNNER_TEMP/publish-response.json" -w '%{http_code}' \
+            -X POST "${STORE_API%/}/api/apps" \
+            -H "Authorization: Bearer $PUBLISH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/publish.json")"
+
+          cat "$RUNNER_TEMP/publish-response.json"
+          echo
+          if [ "$STATUS" = "409" ]; then
+            echo "::error::витрина отклонила версию: поднимите versionCode в app/build.gradle.kts"
+            exit 1
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::витрина ответила HTTP $STATUS"
+            exit 1
+          fi
+          echo "Опубликовано в ${STORE_API%/}"
 
       - name: Summary
         if: always()
