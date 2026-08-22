@@ -50,6 +50,34 @@ shots=0
 
 # Снимок сохраняется, только если приложение в фокусе и такого кадра ещё не
 # было: у экрана без изменений иначе получилось бы пять одинаковых картинок.
+# Перетаскивание отдельными событиями. `input swipe` эмулятор в CI отдаёт
+# слишком быстро, и Compose видит его как одиночное касание, а не жест —
+# слайдеры «проведите, чтобы начать» так не срабатывают.
+slow_drag() {
+    local x1="$1" y1="$2" x2="$3" y2="$4" steps=12 i x y
+    adb shell input motionevent DOWN "$x1" "$y1" >/dev/null 2>&1 || return 1
+    for i in $(seq 1 "$steps"); do
+        x=$(( x1 + (x2 - x1) * i / steps ))
+        y=$(( y1 + (y2 - y1) * i / steps ))
+        adb shell input motionevent MOVE "$x" "$y" >/dev/null 2>&1
+    done
+    adb shell input motionevent UP "$x2" "$y2" >/dev/null 2>&1
+}
+
+# Действие: drag выполняется по событиям, остальное — обычным input.
+run_action() {
+    case "$1" in
+        drag*)
+            # shellcheck disable=SC2086
+            slow_drag $(printf '%s' "$1" | cut -d' ' -f2-)
+            ;;
+        *)
+            # shellcheck disable=SC2086
+            adb shell input $1 >/dev/null 2>&1 || true
+            ;;
+    esac
+}
+
 keyboard_shown() {
     adb shell dumpsys input_method | grep -q 'mInputShown=true'
 }
@@ -173,7 +201,7 @@ wide = [
 if wide:
     n = min(wide, key=lambda item: item['y1'])
     cy = (n['y1'] + n['y2']) // 2
-    print(f"{n['key']}\tswipe {n['x1'] + n['width'] // 10} {cy} {n['x2'] - n['width'] // 10} {cy} 700")
+    print(f"{n['key']}\tdrag {n['x1'] + n['width'] // 10} {cy} {n['x2'] - n['width'] // 10} {cy}")
     sys.exit(0)
 
 # 3. Обычная кнопка или карточка: жмём самую крупную из неиспробованных.
@@ -204,14 +232,22 @@ while [ "$shots" -lt "$MAX_SHOTS" ] && [ "$step" -lt "$MAX_STEPS" ]; do
 
     key="${action%%$'\t'*}"
     command="${action#*$'\t'}"
+    last_signature="$(screen_signature || true)"
     echo "шаг $step: $command"
     printf '%s\n' "$key" >> "$WORK/used"
 
-    # shellcheck disable=SC2086
-    adb shell input $command >/dev/null 2>&1 || true
+    run_action "$command"
     # Ждём дольше, чем живёт короткое всплывающее сообщение: иначе оно попадёт
     # в кадр поверх экрана.
     sleep 4
+
+    # Медленный эмулятор мог не отработать жест с первого раза — пробуем ещё
+    # раз, прежде чем считать элемент бесполезным.
+    if [ "$(screen_signature || true)" = "$last_signature" ]; then
+        echo "  экран не изменился, повторяю"
+        run_action "$command"
+        sleep 4
+    fi
 
     # Нажатие могло увести из приложения — возвращаемся и пробуем дальше.
     if ! focused; then
