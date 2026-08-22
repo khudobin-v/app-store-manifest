@@ -1,9 +1,17 @@
 import { unzipSync } from 'fflate';
 import { collectReferences, parseAndroidManifest, type ApkManifestInfo } from './axml';
 import { ResourceTable } from './arsc';
+import { iconToSvg, type DrawableSource } from './vector';
 
 export interface ApkIcon {
-  bytes: Uint8Array;
+  /** Растровый файл из APK; для векторной иконки пусто. */
+  bytes: Uint8Array | null;
+  /**
+   * Векторная иконка, переведённая в SVG. У приложений с minSdk 26 картинки в
+   * пакете нет вовсе — есть контуры, которые Android рисует сам; растрирует
+   * такой SVG уже панель, средствами браузера.
+   */
+  svg: string | null;
   /** Путь внутри APK — показывается в панели, чтобы было видно, что взято. */
   path: string;
   mime: string;
@@ -76,7 +84,7 @@ export async function readApk(bytes: Uint8Array): Promise<ApkInfo> {
     info.label ?? (table && info.labelRef ? table.resolveString(info.labelRef) : null) ?? null;
 
   const iconPath = pickIconPath(bytes, table, info.iconRef, rasterCandidates);
-  const icon = iconPath ? extractIcon(bytes, iconPath) : null;
+  const icon = (iconPath ? extractIcon(bytes, iconPath) : null) ?? vectorIcon(bytes, table, info.iconRef);
 
   return {
     ...info,
@@ -148,7 +156,35 @@ function readEntry(apk: Uint8Array, path: string): Uint8Array | null {
 function extractIcon(bytes: Uint8Array, path: string): ApkIcon | null {
   const data = readEntry(bytes, path);
   if (!data || data.byteLength === 0) return null;
-  return { bytes: data, path, mime: mimeFor(path) };
+  return { bytes: data, svg: null, path, mime: mimeFor(path) };
+}
+
+/**
+ * Иконка, собранная из векторных контуров.
+ *
+ * Растр ищется первым: если в APK лежит готовый PNG, брать его дешевле и
+ * точнее. Сюда доходят пакеты, где иконка — только adaptive icon с вектором.
+ */
+function vectorIcon(apk: Uint8Array, table: ResourceTable | null, iconRef: number | null): ApkIcon | null {
+  if (!table || !iconRef) return null;
+
+  const source: DrawableSource = {
+    file(id) {
+      const path = table.resolve(id)[0]?.value;
+      if (!path) return null;
+      const data = readEntry(apk, path);
+      return data ? { path, bytes: data } : null;
+    },
+    color(id) {
+      return table.resolveColor(id);
+    },
+  };
+
+  const svg = iconToSvg(iconRef, source);
+  if (!svg) return null;
+
+  const path = table.resolve(iconRef)[0]?.value ?? 'иконка';
+  return { bytes: null, svg, path, mime: 'image/svg+xml' };
 }
 
 /** Блок подписи APK v2/v3 помечен магической строкой перед central directory. */

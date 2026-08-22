@@ -48,10 +48,11 @@ describe('readApk', () => {
       if (!hasRaster) continue;
 
       expect(info.icon, path).not.toBeNull();
-      expect(info.icon!.bytes.byteLength).toBeGreaterThan(0);
+      expect(info.icon!.bytes, path).not.toBeNull();
+      expect(info.icon!.bytes!.byteLength).toBeGreaterThan(0);
       // PNG начинается с сигнатуры \x89PNG.
       if (info.icon!.mime === 'image/png') {
-        expect(Array.from(info.icon!.bytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+        expect(Array.from(info.icon!.bytes!.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
       }
     }
   });

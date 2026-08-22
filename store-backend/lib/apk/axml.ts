@@ -14,6 +14,7 @@
 const CHUNK_STRING_POOL = 0x0001;
 const CHUNK_RESOURCE_MAP = 0x0180;
 const CHUNK_START_TAG = 0x0102;
+const CHUNK_END_TAG = 0x0103;
 
 const UTF8_FLAG = 1 << 8;
 
@@ -264,4 +265,88 @@ export function collectReferences(bytes: Uint8Array): number[] {
   }
 
   return references;
+}
+
+/** Атрибут произвольного тега AXML: имя может быть вырезано, тогда остаётся id. */
+export interface XmlAttribute {
+  name: string | null;
+  /** Идентификатор системного атрибута (android:pathData и т.п.). */
+  resourceId: number | null;
+  /** Тип значения: 0x01 ссылка, 0x03 строка, 0x04 float, 0x1c цвет… */
+  type: number;
+  data: number;
+  stringValue: string | null;
+}
+
+export interface XmlNode {
+  tag: string | null;
+  attributes: XmlAttribute[];
+  children: XmlNode[];
+}
+
+/**
+ * Разбор произвольного AXML в дерево — нужен для векторных иконок.
+ *
+ * В оптимизированных сборках имена тегов и атрибутов вырезаны из пула строк,
+ * поэтому вместе с именем всегда отдаётся resourceId: по нему и опознаются
+ * android:pathData, android:fillColor и остальные.
+ */
+export function parseXmlTree(bytes: Uint8Array): XmlNode | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.byteLength < 8 || view.getUint16(0, true) !== 0x0003) return null;
+
+  let pool: StringPool | null = null;
+  let resourceMap: number[] = [];
+  const stack: XmlNode[] = [];
+  let root: XmlNode | null = null;
+
+  let offset = view.getUint16(2, true);
+  while (offset + 8 <= view.byteLength) {
+    const type = view.getUint16(offset, true);
+    const size = view.getUint32(offset + 4, true);
+    if (size <= 0) break;
+
+    if (type === CHUNK_STRING_POOL && !pool) {
+      pool = readStringPool(view, offset);
+    } else if (type === CHUNK_RESOURCE_MAP) {
+      const count = (size - 8) / 4;
+      resourceMap = [];
+      for (let i = 0; i < count; i++) resourceMap.push(view.getUint32(offset + 8 + i * 4, true));
+    } else if (type === CHUNK_START_TAG && pool) {
+      const attrExt = offset + 16;
+      const tag = pool.at(view.getUint32(attrExt + 4, true));
+      const attributeStart = view.getUint16(attrExt + 8, true);
+      const attributeSize = view.getUint16(attrExt + 10, true) || 20;
+      const attributeCount = view.getUint16(attrExt + 12, true);
+
+      const attributes: XmlAttribute[] = [];
+      for (let i = 0; i < attributeCount; i++) {
+        const base = attrExt + attributeStart + i * attributeSize;
+        if (base + 20 > view.byteLength) break;
+        const nameIndex = view.getUint32(base + 4, true);
+        const rawIndex = view.getInt32(base + 8, true);
+        const dataType = view.getUint8(base + 15);
+        const data = view.getUint32(base + 16, true);
+        const name = pool.at(nameIndex);
+        attributes.push({
+          name: name && name.length > 0 ? name : null,
+          resourceId: nameIndex < resourceMap.length ? resourceMap[nameIndex] : null,
+          type: dataType,
+          data,
+          stringValue: dataType === TYPE_STRING ? pool.at(data) : rawIndex >= 0 ? pool.at(rawIndex) : null,
+        });
+      }
+
+      const node: XmlNode = { tag, attributes, children: [] };
+      stack[stack.length - 1]?.children.push(node);
+      if (!root) root = node;
+      stack.push(node);
+    } else if (type === CHUNK_END_TAG) {
+      stack.pop();
+    }
+
+    offset += size;
+  }
+
+  return root;
 }

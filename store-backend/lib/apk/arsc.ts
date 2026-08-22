@@ -22,6 +22,8 @@ const ENTRY_FLAG_COMPLEX = 0x0001;
 
 const TYPE_REFERENCE = 0x01;
 const TYPE_STRING = 0x03;
+// Цвета: ARGB8, RGB8, ARGB4, RGB4 — фон adaptive icon почти всегда такой.
+const COLOR_TYPES = new Set([0x1c, 0x1d, 0x1e, 0x1f]);
 
 const NO_ENTRY = 0xffffffff;
 
@@ -84,6 +86,8 @@ export class ResourceTable {
     private readonly strings: string[],
     /** id ресурса → значения во всех конфигурациях. */
     private readonly entries: Map<number, ResourceValue[]>,
+    /** id ресурса → цвет в формате ARGB. */
+    private readonly colors: Map<number, number>,
   ) {}
 
   static parse(bytes: Uint8Array): ResourceTable | null {
@@ -101,6 +105,7 @@ export class ResourceTable {
 
     const strings: string[] = [];
     const entries = new Map<number, ResourceValue[]>();
+    const colors = new Map<number, number>();
 
     let offset = view.getUint16(2, true);
     while (offset + 8 <= view.byteLength) {
@@ -111,13 +116,13 @@ export class ResourceTable {
       if (type === CHUNK_STRING_POOL && strings.length === 0) {
         strings.push(...readStringPool(view, offset));
       } else if (type === CHUNK_PACKAGE) {
-        ResourceTable.parsePackage(view, offset, size, entries);
+        ResourceTable.parsePackage(view, offset, size, entries, colors);
       }
 
       offset += size;
     }
 
-    return new ResourceTable(strings, entries);
+    return new ResourceTable(strings, entries, colors);
   }
 
   private static parsePackage(
@@ -125,6 +130,7 @@ export class ResourceTable {
     start: number,
     size: number,
     entries: Map<number, ResourceValue[]>,
+    colors: Map<number, number>,
   ): void {
     const headerSize = view.getUint16(start + 2, true);
     const packageId = view.getUint32(start + 8, true);
@@ -138,7 +144,7 @@ export class ResourceTable {
       if (chunkSize <= 0) break;
 
       if (type === CHUNK_TYPE) {
-        ResourceTable.parseType(view, offset, packageId, entries);
+        ResourceTable.parseType(view, offset, packageId, entries, colors);
       }
 
       offset += chunkSize;
@@ -150,6 +156,7 @@ export class ResourceTable {
     start: number,
     packageId: number,
     entries: Map<number, ResourceValue[]>,
+    colors: Map<number, number>,
   ): void {
     const headerSize = view.getUint16(start + 2, true);
     const typeId = view.getUint8(start + 8);
@@ -191,9 +198,14 @@ export class ResourceTable {
 
       const dataType = view.getUint8(valueOffset + 3);
       const data = view.getUint32(valueOffset + 4, true);
+      const id = (packageId << 24) | (typeId << 16) | entryIndex;
+
+      if (COLOR_TYPES.has(dataType)) {
+        if (!colors.has(id)) colors.set(id, data);
+        continue;
+      }
       if (dataType !== TYPE_STRING) continue;
 
-      const id = (packageId << 24) | (typeId << 16) | entryIndex;
       const list = entries.get(id) ?? [];
       list.push({ value: String(data), density });
       entries.set(id, list);
@@ -207,6 +219,15 @@ export class ResourceTable {
       .map(({ value, density }) => ({ value: this.strings[Number(value)] ?? '', density }))
       .filter((entry) => entry.value.length > 0)
       .sort((a, b) => b.density - a.density);
+  }
+
+  /** Цвет ресурса в виде `#rrggbb` и отдельной прозрачности: фон adaptive icon. */
+  resolveColor(id: number): { hex: string; alpha: number } | null {
+    const argb = this.colors.get(id);
+    if (argb === undefined) return null;
+    const alpha = ((argb >>> 24) & 0xff) / 255;
+    const hex = `#${(argb & 0xffffff).toString(16).padStart(6, '0')}`;
+    return { hex, alpha };
   }
 
   /** Первое строковое значение: годится для названия приложения. */

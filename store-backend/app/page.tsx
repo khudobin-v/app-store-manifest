@@ -58,6 +58,39 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+/**
+ * Иконка приложения как файл-картинка.
+ *
+ * У приложений с minSdk 26 растровой иконки в пакете нет: там adaptive icon,
+ * то есть цвет и векторные контуры, а картинку Android рисует сам. Разбор APK
+ * отдаёт такой случай как SVG — растрируем его тем же способом, что и система:
+ * рисуем в canvas и снимаем PNG.
+ */
+async function iconBlobOf(info: ApkInfo): Promise<Blob | null> {
+  const icon = info.icon;
+  if (!icon) return null;
+  if (icon.bytes) return new Blob([icon.bytes as BlobPart], { type: icon.mime });
+  if (!icon.svg) return null;
+
+  const source = new Image();
+  source.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(icon.svg)}`;
+  try {
+    await source.decode();
+  } catch {
+    return null;
+  }
+
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.drawImage(source, 0, 0, size, size);
+
+  return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
 export default function Admin() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [catalog, setCatalog] = useState<Manifest | null>(null);
@@ -812,11 +845,8 @@ function Publish({
       const parsed = await readApk(new Uint8Array(await selected.arrayBuffer()));
       setInfo(parsed);
       setName(parsed.label ?? parsed.packageName);
-      setIconPreview(
-        parsed.icon
-          ? URL.createObjectURL(new Blob([parsed.icon.bytes as BlobPart], { type: parsed.icon.mime }))
-          : null,
-      );
+      const preview = await iconBlobOf(parsed);
+      setIconPreview(preview ? URL.createObjectURL(preview) : null);
     } catch (e) {
       onError((e as Error).message);
       setFile(null);
@@ -843,13 +873,14 @@ function Publish({
       });
 
       let iconUrl: string | undefined;
-      if (info.icon) {
-        step('Загружаю иконку из APK');
-        const extension = info.icon.path.split('.').pop() ?? 'png';
+      const iconFile = await iconBlobOf(info);
+      if (iconFile) {
+        step(info.icon?.svg ? 'Рисую иконку из вектора APK' : 'Загружаю иконку из APK');
+        const extension = iconFile.type === 'image/png' ? 'png' : (info.icon!.path.split('.').pop() ?? 'png');
         const iconBlob = await upload(
           `icons/${info.packageName}-${info.versionCode}.${extension}`,
-          new Blob([info.icon.bytes as BlobPart], { type: info.icon.mime }),
-          { access: 'public', handleUploadUrl: '/api/upload', contentType: info.icon.mime },
+          iconFile,
+          { access: 'public', handleUploadUrl: '/api/upload', contentType: iconFile.type },
         );
         iconUrl = iconBlob.url;
       }
