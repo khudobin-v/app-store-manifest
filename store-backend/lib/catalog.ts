@@ -169,6 +169,9 @@ export async function readCatalog(): Promise<Manifest> {
       apkSizeBytes: latest.apkSizeBytes,
       changelog: latest.changelog,
       releasedAt: latest.releasedAt,
+      ...(latest.screenshots && latest.screenshots.length > 0
+        ? { screenshots: latest.screenshots }
+        : {}),
       publishedBy: latest.publishedBy,
       versions: history.map(
         ({ id: _id, name: _name, iconUrl: _icon, publishedBy: _by, ...version }) => version,

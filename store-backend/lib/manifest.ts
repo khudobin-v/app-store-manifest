@@ -16,6 +16,8 @@ export interface AppVersion {
   apkSizeBytes: number;
   changelog: string;
   releasedAt: string;
+  /** Снимки экрана этой версии: их делает конвейер сборки на эмуляторе. */
+  screenshots?: string[];
 }
 
 export interface AppEntry extends AppVersion {
@@ -86,6 +88,16 @@ export function validateVersion(version: AppVersion, id: string): void {
   }
   if (!Number.isInteger(version.apkSizeBytes) || version.apkSizeBytes <= 0) {
     throw new ManifestFormatError('apkSizeBytes должен быть положительным целым');
+  }
+  if (version.screenshots) {
+    if (!Array.isArray(version.screenshots)) {
+      throw new ManifestFormatError('screenshots должен быть массивом ссылок');
+    }
+    for (const shot of version.screenshots) {
+      if (typeof shot !== 'string' || !shot.startsWith('https://')) {
+        throw new ManifestFormatError('каждый скриншот должен быть https-ссылкой');
+      }
+    }
   }
 }
 

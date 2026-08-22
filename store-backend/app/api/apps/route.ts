@@ -29,6 +29,8 @@ interface PublishRequest {
   apkSizeBytes: number;
   changelog?: string;
   releasedAt?: string;
+  /** Ссылки на снимки экрана — их присылает конвейер сборки. */
+  screenshots?: string[];
   /** Перезалить уже опубликованный versionCode — только из интерфейса, не из CI. */
   force?: boolean;
 }
@@ -61,6 +63,9 @@ export async function POST(request: Request) {
     apkSizeBytes: Number(body.apkSizeBytes),
     changelog: (body.changelog ?? '').trim() || `Версия ${body.versionName}`,
     releasedAt: body.releasedAt ?? `${new Date().toISOString().slice(0, 19)}Z`,
+    ...(Array.isArray(body.screenshots) && body.screenshots.length > 0
+      ? { screenshots: body.screenshots.map(String) }
+      : {}),
     publishedBy: fromCi ? 'ci' : (session?.login ?? 'ci'),
   };
 
